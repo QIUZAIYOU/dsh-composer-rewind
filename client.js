@@ -351,8 +351,18 @@ window.__ModuleLoader__.load({
       return clean;
     }
 
+    /**
+     * Identity of one attachment for de-duplication. The runtime id changes
+     * every time the same file is uploaded again, so it cannot be part of the
+     * signature; name + byte size + kind is stable across uploads. The id stays
+     * on the record for restore and blob lookup.
+     */
+    function attachmentFingerprint(item) {
+      return [item.kind || 'file', item.name || 'file', item.size || 0].join('');
+    }
+
     function attachmentKeys(attachments) {
-      return (attachments || []).map((item) => item.key).join('|');
+      return (attachments || []).map(attachmentFingerprint).join('|');
     }
 
     function sameAttachmentKeys(left, right) {
@@ -435,7 +445,6 @@ window.__ModuleLoader__.load({
 
     let entries = loadEntries();
     let live = loadLive();
-    let lastRetiredSignature = '';
     const listeners = new Set();
 
     function emit() {
@@ -499,8 +508,6 @@ window.__ModuleLoader__.load({
       if (attachments.length === 0 && isJunk(text)) return false;
 
       const signature = entrySignature(text, attachments);
-      if (lastRetiredSignature === signature) return false;
-
       const now = Date.now();
       const fresh = {
         id: uid(),
@@ -520,9 +527,9 @@ window.__ModuleLoader__.load({
           at: now,
           references: fresh.references,
           command: fresh.command,
+          attachments: fresh.attachments,
           settings: fresh.settings || head.settings,
         };
-        lastRetiredSignature = signature;
         commitEntries([refreshed, ...entries.slice(1)]);
         return true;
       }
@@ -532,19 +539,16 @@ window.__ModuleLoader__.load({
         // Typing more of the same draft: replace the head so references,
         // attachments and setup all describe the newest revision.
         if (sameAttachments && text.startsWith(head.text)) {
-          lastRetiredSignature = signature;
           commitEntries([{ ...fresh, id: head.id }, ...entries.slice(1)]);
           return true;
         }
         // Backspacing inside a draft we already hold: keep the fuller head.
         if (sameAttachments && head.text.startsWith(text)) {
-          lastRetiredSignature = signature;
           commitEntries([{ ...head, at: now, settings: fresh.settings || head.settings }, ...entries.slice(1)]);
           return true;
         }
       }
 
-      lastRetiredSignature = signature;
       commitEntries([
         fresh,
         ...entries.filter((item) => entrySignature(item.text, item.attachments) !== signature),
@@ -582,7 +586,6 @@ window.__ModuleLoader__.load({
     }
 
     function clearAll() {
-      lastRetiredSignature = '';
       commitEntries([]);
     }
 
@@ -2729,7 +2732,6 @@ window.__ModuleLoader__.load({
         reset: () => {
           entries = [];
           live = null;
-          lastRetiredSignature = '';
           recall.index = -1;
           recall.at = 0;
           recall.text = '';

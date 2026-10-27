@@ -205,6 +205,30 @@ test('previous package name v3 entries migrate to the new key', () => {
   assert.ok(storage.getItem('dsh-composer-rewind:v3'));
 });
 
+test('same text and same file merge even when upload ids differ', () => {
+  const { api } = load();
+  api.reset();
+  const base = { text: '继续优化：同一段内容', sessionId: 's1' };
+  api.retireSnapshot({ ...base, attachments: [
+    { key: 'upload-a', name: 'Creature #2.gif', mime: 'image/gif', size: 255192, kind: 'image' },
+  ] });
+  api.retireSnapshot({ ...base, attachments: [
+    { key: 'upload-b', name: 'Creature #2.gif', mime: 'image/gif', size: 255192, kind: 'image' },
+  ] });
+  assert.equal(api.entries().length, 1);
+  assert.equal(api.entries()[0].attachments[0].key, 'upload-b');
+});
+
+test('text-only and text-with-file stay separate', () => {
+  const { api } = load();
+  api.reset();
+  api.retireSnapshot({ text: '同一段内容', sessionId: 's1' });
+  api.retireSnapshot({ text: '同一段内容', sessionId: 's1', attachments: [
+    { key: 'upload-a', name: 'note.txt', mime: 'text/plain', size: 12, kind: 'file' },
+  ] });
+  assert.equal(api.entries().length, 2);
+});
+
 test('hover card is clamped inside the viewport', () => {
   const { api } = load();
   const right = api.placeHoverCard({ left: 1200, right: 1260, top: 100, bottom: 130 }, 430, 300);
