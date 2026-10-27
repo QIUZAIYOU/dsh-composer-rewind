@@ -1867,7 +1867,6 @@ window.__ModuleLoader__.load({
         {
           className: 'pv-thumb',
           style,
-          title: label,
           'data-pending': pending ? '1' : '0',
           'data-missing': missing ? '1' : '0',
         },
@@ -1916,7 +1915,7 @@ window.__ModuleLoader__.load({
           entry.live && !entry.isCurrent ? h('span', { className: 'pv-live' }, t('draft')) : null,
           h(
             'span',
-            { className: 'pv-text', title: text || t('attachmentsOnly') },
+            { className: 'pv-text' },
             text || h('span', { className: 'pv-muted' }, t('attachmentsOnly')),
           ),
           h(AttachmentStrip, { attachments, size: 20, limit: 3 }),
@@ -1934,7 +1933,6 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'pv-act',
-              title: t('insert'),
               'aria-label': t('insert'),
               disabled: busy,
               onClick: (event) => {
@@ -1949,7 +1947,6 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'pv-act',
-              title: t('copy'),
               'aria-label': t('copy'),
               onClick: (event) => {
                 event.stopPropagation();
@@ -1966,7 +1963,6 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'pv-act',
                   'data-tone': 'danger',
-                  title: t('remove'),
                   'aria-label': t('remove'),
                   onClick: (event) => {
                     event.stopPropagation();
@@ -1981,22 +1977,25 @@ window.__ModuleLoader__.load({
 
     function HoverCard(props) {
       const { entry, rect, scheme } = props;
-      const width = 430;
-      const margin = 12;
-      let left = rect.right + 14;
-      if (left + width > window.innerWidth - margin) left = Math.max(margin, rect.left - width - 14);
-      let top = Math.max(margin, rect.top);
-      const estimated = 320;
-      if (top + estimated > window.innerHeight - margin) {
-        top = Math.max(margin, window.innerHeight - estimated - margin);
-      }
+      const cardRef = useRef(null);
+      const [pos, setPos] = useState(null);
+      useEffect(() => {
+        const node = cardRef.current;
+        if (!node || !node.offsetWidth) return;
+        const placed = placeHoverCard(rect, node.offsetWidth, node.offsetHeight);
+        setPos({ key: entry.id, left: placed.left, top: placed.top });
+      }, [entry.id, rect]);
       const settings = entry.settings;
       return h(
         'div',
         {
           className: 'pv-hover',
           'data-scheme': scheme,
-          style: { left: left + 'px', top: top + 'px' },
+          ref: cardRef,
+          style:
+            pos && pos.key === entry.id
+              ? { left: pos.left + 'px', top: pos.top + 'px' }
+              : { left: '0px', top: '0px', visibility: 'hidden' },
           onMouseDown: (event) => event.stopPropagation(),
           onMouseEnter: props.onMouseEnter,
           onMouseLeave: props.onMouseLeave,
@@ -2020,7 +2019,7 @@ window.__ModuleLoader__.load({
                   'div',
                   { key: attachment.key || index, className: 'pv-hover-row' },
                   h(AttachmentThumb, { attachment, size: 26 }),
-                  h('span', { className: 'pv-hover-name', title: attachment.name }, attachment.name || 'file'),
+                  h('span', { className: 'pv-hover-name' }, attachment.name || 'file'),
                   h(
                     'span',
                     { className: 'pv-hover-size' },
@@ -2202,7 +2201,19 @@ window.__ModuleLoader__.load({
         ? Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
         : Math.max(12, (window.innerWidth - width) / 2);
       const bottom = rect ? Math.max(12, window.innerHeight - rect.top + 6) : 96;
-      return { left, width, bottom, maxHeight: Math.max(220, Math.min(520, bottom - 16)) };
+      const above = rect ? rect.top - 24 : window.innerHeight - 140;
+      return { left, width, bottom, maxHeight: Math.max(160, Math.min(320, above)) };
+    }
+
+    function placeHoverCard(rect, width, height) {
+      const margin = 10;
+      let left = rect.right + 14;
+      if (left + width > window.innerWidth - margin) left = rect.left - width - 14;
+      left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+      let top = rect.top;
+      if (top + height > window.innerHeight - margin) top = rect.bottom - height;
+      top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+      return { left: left, top: top };
     }
 
     function dayBucket(at) {
@@ -2714,6 +2725,7 @@ window.__ModuleLoader__.load({
         formatTime,
         permissionLabel,
         presetLabel,
+        placeHoverCard,
         reset: () => {
           entries = [];
           live = null;

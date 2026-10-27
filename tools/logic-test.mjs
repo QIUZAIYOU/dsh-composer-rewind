@@ -49,6 +49,8 @@ function load(seed) {
     clearInterval: () => {},
   };
   const window = {
+    innerWidth: 1280,
+    innerHeight: 720,
     localStorage: storage,
     setTimeout: sandbox.setTimeout,
     clearTimeout: sandbox.clearTimeout,
@@ -201,6 +203,16 @@ test('previous package name v3 entries migrate to the new key', () => {
   const { api, storage } = load({ 'dsh-prompt-vault:v3': legacy });
   assert.equal(api.entries().length, 1);
   assert.ok(storage.getItem('dsh-composer-rewind:v3'));
+});
+
+test('hover card is clamped inside the viewport', () => {
+  const { api } = load();
+  const right = api.placeHoverCard({ left: 1200, right: 1260, top: 100, bottom: 130 }, 430, 300);
+  assert.ok(right.left >= 10, 'left margin');
+  assert.ok(right.left + 430 <= 1270, 'right edge stays inside');
+  const bottom = api.placeHoverCard({ left: 100, right: 400, top: 650, bottom: 680 }, 430, 300);
+  assert.ok(bottom.top >= 10, 'top margin');
+  assert.ok(bottom.top + 300 <= 710, 'bottom edge stays inside');
 });
 
 /* -------------------------------------------------------------- settings ---- */
