@@ -373,6 +373,14 @@ test('ctrl+alt+z skips entries from other sessions', () => {
   assert.equal(applied[0], 'session one only');
 });
 
+test('legacy entries without a session are adopted by the first session', () => {
+  const { api } = load();
+  api.retire('written before session scoping');
+  assert.equal(api.entriesForSession('s1').length, 0);
+  api.publishComposer('s1', { setDraft() {} });
+  assert.equal(api.entriesForSession('s1').length, 1);
+});
+
 /* --------------------------------------------------------------- report ---- */
 
 let failed = 0;

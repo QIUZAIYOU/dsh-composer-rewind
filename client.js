@@ -1077,9 +1077,24 @@ window.__ModuleLoader__.load({
       return () => sessionListeners.delete(listener);
     }
 
+    function adoptOrphanEntries(sessionId) {
+      if (!sessionId) return;
+      let changed = false;
+      for (const item of entries) {
+        if (!item.sessionId) {
+          item.sessionId = sessionId;
+          changed = true;
+        }
+      }
+      if (changed) commitEntries(entries);
+    }
+
     function setActiveSession(sessionId) {
       if (!sessionId || sessionId === activeSessionId) return;
       activeSessionId = sessionId;
+      // Records written before history was session-scoped carry no session id.
+      // Adopt them into the first session we see instead of hiding them forever.
+      adoptOrphanEntries(sessionId);
       for (const listener of sessionListeners) listener();
     }
 
