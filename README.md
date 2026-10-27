@@ -67,10 +67,16 @@ Prompt Vault 是 DeepSeek Harness Web UI 的输入框历史插件。它在你输
 
 ## 安装
 
-将本目录作为本地 bundle 安装到当前 Harness profile：
+从 npm 安装到当前 Harness profile：
 
-```text
-plugin_manager install_bundle target=<本目录绝对路径>
+```bash
+dsh plugin add dsh-prompt-vault
+```
+
+本地开发时也可以直接安装目录：
+
+```bash
+dsh plugin add <本目录绝对路径>
 ```
 
 安装后刷新 Web GUI 页面，输入框左侧会出现历史按钮。
