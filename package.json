@@ -1,22 +1,22 @@
 {
-  "name": "dsh-prompt-vault",
-  "version": "1.1.2",
+  "name": "dsh-composer-rewind",
+  "version": "2.0.0",
   "type": "module",
-  "description": "Composer input history for the DeepSeek Harness Web UI: records prompts, attachments, command tokens and the active DSH setup, then restores the whole composer state.",
+  "description": "Composer input history for the DeepSeek Harness Web UI: records composer contents, attachments, command tokens and the active DSH setup, then restores the whole composer state.",
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
-    "prompt-history",
+    "composer-history",
     "composer"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/QIUZAIYOU/dsh-prompt-vault.git"
+    "url": "git+https://github.com/QIUZAIYOU/dsh-composer-rewind.git"
   },
-  "homepage": "https://github.com/QIUZAIYOU/dsh-prompt-vault#readme",
+  "homepage": "https://github.com/QIUZAIYOU/dsh-composer-rewind#readme",
   "bugs": {
-    "url": "https://github.com/QIUZAIYOU/dsh-prompt-vault/issues"
+    "url": "https://github.com/QIUZAIYOU/dsh-composer-rewind/issues"
   },
   "publishConfig": {
     "access": "public"

@@ -1,5 +1,5 @@
 /**
- * Behaviour tests for the prompt-vault store, run against the real client.js
+ * Behaviour tests for the Composer Rewind store, run against the real client.js
  * inside a vm sandbox (no browser needed).
  *
  * Run: node tools/logic-test.mjs
@@ -177,7 +177,7 @@ test('clearing the composer drops the live draft but keeps history', () => {
 
 /* ------------------------------------------------------------ migration ---- */
 
-test('legacy v1 entries are cleaned once and written to v3', () => {
+test('legacy v1 entries are cleaned once and written to the v3 store', () => {
   const legacy = JSON.stringify([
     { id: 'a', text: 'l', at: 1 },
     { id: 'b', text: 'li', at: 2 },
@@ -186,14 +186,21 @@ test('legacy v1 entries are cleaned once and written to v3', () => {
   const { api, storage } = load({ 'dsh-prompt-vault:v1': legacy });
   assert.equal(api.entries().length, 1);
   assert.equal(api.entries()[0].text, '帮我把这段代码重写一下');
-  assert.ok(storage.getItem('dsh-prompt-vault:v3'));
+  assert.ok(storage.getItem('dsh-composer-rewind:v3'));
 });
 
 test('legacy v2 entries migrate into the v3 store', () => {
   const legacy = JSON.stringify([{ id: 'a', text: '旧版记录也要保留', at: 1 }]);
   const { api, storage } = load({ 'dsh-prompt-vault:v2': legacy });
   assert.equal(api.entries().length, 1);
-  assert.ok(storage.getItem('dsh-prompt-vault:v3'));
+  assert.ok(storage.getItem('dsh-composer-rewind:v3'));
+});
+
+test('previous package name v3 entries migrate to the new key', () => {
+  const legacy = JSON.stringify([{ id: 'a', text: '改名之前的记录也不能丢', at: 2 }]);
+  const { api, storage } = load({ 'dsh-prompt-vault:v3': legacy });
+  assert.equal(api.entries().length, 1);
+  assert.ok(storage.getItem('dsh-composer-rewind:v3'));
 });
 
 /* -------------------------------------------------------------- settings ---- */

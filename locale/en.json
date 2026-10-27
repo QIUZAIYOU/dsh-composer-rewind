@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Prompt Vault",
-    "description": "Records prompts, attachments, @ references, / commands and the active model, thinking level, permission and agent preset, then restores the whole composer state. Stored on this machine only."
+    "title": "Composer Rewind",
+    "description": "Records the composer contents — text, image and file attachments, @ references, / commands — plus the active model, thinking level, permission and agent preset, then restores the whole composer state. Stored on this machine only."
   }
 }

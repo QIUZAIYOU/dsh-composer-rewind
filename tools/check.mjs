@@ -1,5 +1,5 @@
 /**
- * Static checks for the prompt-vault client bundle.
+ * Static checks for the Composer Rewind client bundle.
  * Run: node tools/check.mjs
  */
 import fs from 'node:fs';
@@ -46,7 +46,7 @@ function check(label, condition, detail) {
 
 /* ---------------------------------------------------------------- CSS ---- */
 
-const cssMatch = source.match(/const CSS = `([\s\S]*?)`;\n/);
+const cssMatch = source.match(/const CSS = `([\s\S]*?)`;\s*\n/);
 check('CSS block found', Boolean(cssMatch));
 const css = cssMatch ? cssMatch[1] : '';
 
@@ -84,7 +84,7 @@ check('recall walks the history backwards', /function recallPrevious/.test(sourc
 check('history entries retire instead of stream', /function retire\(/.test(source) && /COALESCE_WINDOW_MS/.test(source));
 check('live draft is stored separately from history', /LIVE_KEY/.test(source) && /function setLive/.test(source));
 check('junk filter present', /function isJunk/.test(source) && /CJK\.test/.test(source));
-check('legacy v1 entries migrate once', /LEGACY_KEY/.test(source));
+check('legacy entries migrate to the renamed keys', /LEGACY_KEY/.test(source) && /PREV_STORAGE_KEY/.test(source));
 check('composer inserts through inputActions.setDraft', /setDraft\(text\)/.test(source));
 check('structured draft snapshots are supported', /function buildSnapshotFrom/.test(source) && /function referencesOf/.test(source));
 check('attachments are persisted in IndexedDB', /function idb\(/.test(source) && /BLOB_DB/.test(source) && /indexedDB\.open/.test(source));

@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-prompt-vault',
+  id: 'dsh-composer-rewind',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
@@ -28,12 +28,12 @@ window.__ModuleLoader__.load({
 
     const DICT = {
       zh: {
-        trigger: '提示词历史',
-        triggerHint: '提示词历史 · Ctrl+Alt+Z 取上一条',
-        open: '打开提示词历史',
-        title: '提示词历史',
-        subtitle: '提示词、附件和当时的 DSH 配置',
-        search: '搜索提示词、附件或配置',
+        trigger: '输入框历史',
+        triggerHint: '输入框历史 · Ctrl+Alt+Z 回溯上一条',
+        open: '打开输入框历史',
+        title: '输入框历史',
+        subtitle: '输入内容、附件和当时的 DSH 配置',
+        search: '搜索输入内容、附件或配置',
         emptyTitle: '还没有历史记录',
         empty: '发送、清空输入框或切换会话时，当前内容会存到这里。',
         emptySearch: '没有匹配的记录。',
@@ -60,12 +60,12 @@ window.__ModuleLoader__.load({
         groupEarlier: '更早',
         close: '关闭',
         hintNav: '选择',
-        footer: '恢复会把提示词、附件和当时的配置写回输入框',
+        footer: '恢复会把输入内容、附件和当时的配置写回输入框',
         hint: 'Ctrl+Alt+Z 取上一条',
         noHistory: '还没有历史记录',
         inserted: '已插入',
         noComposer: '输入框还没准备好，稍后再试',
-        restoring: '正在恢复提示词、附件与配置…',
+        restoring: '正在恢复输入内容、附件与配置…',
         restored: '已恢复',
         restoredWith: '已恢复，但未能应用：',
         restoreFailed: '恢复失败',
@@ -86,12 +86,12 @@ window.__ModuleLoader__.load({
         failSettings: '配置',
       },
       en: {
-        trigger: 'Prompt history',
-        triggerHint: 'Prompt history · Ctrl+Alt+Z for the previous one',
-        open: 'Open prompt history',
-        title: 'Prompt history',
-        subtitle: 'Prompts, attachments and the DSH setup you used',
-        search: 'Search prompts, attachments or setup',
+        trigger: 'Composer history',
+        triggerHint: 'Composer history · Ctrl+Alt+Z for the previous one',
+        open: 'Open composer history',
+        title: 'Composer history',
+        subtitle: 'Composer contents, attachments and the DSH setup you used',
+        search: 'Search contents, attachments or setup',
         emptyTitle: 'No history yet',
         empty: 'Send, clear the composer or switch sessions and what you had is saved here.',
         emptySearch: 'No matching entries.',
@@ -118,12 +118,12 @@ window.__ModuleLoader__.load({
         groupEarlier: 'Earlier',
         close: 'Close',
         hintNav: 'to move',
-        footer: 'Restore writes the prompt, attachments and setup back into the composer',
+        footer: 'Restore writes the contents, attachments and setup back into the composer',
         hint: 'Ctrl+Alt+Z recalls the previous one',
         noHistory: 'No history yet',
         inserted: 'Inserted',
         noComposer: 'The composer is not ready yet',
-        restoring: 'Restoring the prompt, attachments and setup…',
+        restoring: 'Restoring the composer contents, attachments and setup…',
         restored: 'Restored',
         restoredWith: 'Restored, but could not apply:',
         restoreFailed: 'Restore failed',
@@ -211,10 +211,12 @@ window.__ModuleLoader__.load({
      *  - attachment bytes, in IndexedDB, referenced from the snapshots by key.
      * ------------------------------------------------------------------ */
 
-    const STORAGE_KEY = 'dsh-prompt-vault:v3';
+    const STORAGE_KEY = 'dsh-composer-rewind:v3';
+    const PREV_STORAGE_KEY = 'dsh-prompt-vault:v3';
     const LEGACY_STORAGE_KEY = 'dsh-prompt-vault:v2';
     const LEGACY_KEY = 'dsh-prompt-vault:v1';
-    const LIVE_KEY = 'dsh-prompt-vault:live:v3';
+    const LIVE_KEY = 'dsh-composer-rewind:live:v3';
+    const PREV_LIVE_KEY = 'dsh-prompt-vault:live:v3';
     const LEGACY_LIVE_KEY = 'dsh-prompt-vault:live';
     const MAX_ENTRIES = 300;
     const MIN_CHARS = 3;
@@ -224,6 +226,7 @@ window.__ModuleLoader__.load({
     const MAX_BLOB_BYTES = 32 * 1024 * 1024;
     const CJK = /[\u3400-\u9fff\uf900-\ufaff]/;
 
+    // Kept from the previous package name so already-cached attachment bytes stay reachable.
     const BLOB_DB = 'dsh-prompt-vault';
     const BLOB_STORE = 'blobs';
 
@@ -391,6 +394,11 @@ window.__ModuleLoader__.load({
     function loadEntries() {
       const current = readRaw(STORAGE_KEY);
       if (Array.isArray(current)) return sanitize(current);
+      const previous = sanitize(readRaw(PREV_STORAGE_KEY));
+      if (previous.length > 0) {
+        writeRaw(STORAGE_KEY, previous);
+        return previous;
+      }
       const legacy = sanitize(readRaw(LEGACY_STORAGE_KEY));
       if (legacy.length > 0) {
         writeRaw(STORAGE_KEY, legacy);
@@ -420,6 +428,8 @@ window.__ModuleLoader__.load({
     function loadLive() {
       const current = liveOf(readRaw(LIVE_KEY));
       if (current) return current;
+      const previous = liveOf(readRaw(PREV_LIVE_KEY));
+      if (previous) return previous;
       return liveOf(readRaw(LEGACY_LIVE_KEY));
     }
 
@@ -2721,13 +2731,13 @@ window.__ModuleLoader__.load({
         runtime = ctx;
         ctx.effect(() => installStyles());
         ctx.slots.inject('conversation.input.left', () =>
-          ctx.slots.register({ name: 'conversation.input.left', id: 'prompt-vault-tracker', order: 1 }, DraftTracker),
+          ctx.slots.register({ name: 'conversation.input.left', id: 'composer-rewind-tracker', order: 1 }, DraftTracker),
         );
         ctx.slots.inject('conversation.input.left', () =>
-          ctx.slots.register({ name: 'conversation.input.left', id: 'prompt-vault', order: 99 }, Trigger),
+          ctx.slots.register({ name: 'conversation.input.left', id: 'composer-rewind', order: 99 }, Trigger),
         );
         ctx.slots.inject('shell.overlay', () =>
-          ctx.slots.register({ name: 'shell.overlay', id: 'prompt-vault-panel', order: 90 }, Panel),
+          ctx.slots.register({ name: 'shell.overlay', id: 'composer-rewind-panel', order: 90 }, Panel),
         );
         // Release object URLs when the page goes away.
         if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
