@@ -177,7 +177,7 @@ test('clearing the composer drops the live draft but keeps history', () => {
 
 /* ------------------------------------------------------------ migration ---- */
 
-test('legacy v1 entries are cleaned once and written to v2', () => {
+test('legacy v1 entries are cleaned once and written to v3', () => {
   const legacy = JSON.stringify([
     { id: 'a', text: 'l', at: 1 },
     { id: 'b', text: 'li', at: 2 },
@@ -186,7 +186,78 @@ test('legacy v1 entries are cleaned once and written to v2', () => {
   const { api, storage } = load({ 'dsh-prompt-vault:v1': legacy });
   assert.equal(api.entries().length, 1);
   assert.equal(api.entries()[0].text, '帮我把这段代码重写一下');
-  assert.ok(storage.getItem('dsh-prompt-vault:v2'));
+  assert.ok(storage.getItem('dsh-prompt-vault:v3'));
+});
+
+test('legacy v2 entries migrate into the v3 store', () => {
+  const legacy = JSON.stringify([{ id: 'a', text: '旧版记录也要保留', at: 1 }]);
+  const { api, storage } = load({ 'dsh-prompt-vault:v2': legacy });
+  assert.equal(api.entries().length, 1);
+  assert.ok(storage.getItem('dsh-prompt-vault:v3'));
+});
+
+/* -------------------------------------------------------------- settings ---- */
+
+test('settings survive retirement and junk filtering keeps attachments', () => {
+  const { api } = load();
+  api.retireSnapshot({
+    text: '帮我分析这个表格',
+    sessionId: 's1',
+    at: Date.now(),
+    references: [],
+    command: null,
+    attachments: [{ key: 'blob-1', name: 'data.csv', mime: 'text/csv', size: 12, kind: 'file' }],
+    settings: {
+      model: { provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' },
+      permission: 'read-only',
+      agentPreset: 'standard',
+    },
+  });
+  const entry = api.entries()[0];
+  assert.equal(entry.attachments.length, 1);
+  assert.equal(entry.attachments[0].name, 'data.csv');
+  assert.equal(entry.settings.model.reasoningEffort, 'high');
+  assert.equal(entry.settings.permission, 'read-only');
+  assert.equal(entry.settings.agentPreset, 'standard');
+});
+
+test('attachment-only drafts are recorded even with no text', () => {
+  const { api } = load();
+  api.retireSnapshot({
+    text: '',
+    sessionId: 's1',
+    at: Date.now(),
+    references: [],
+    command: null,
+    attachments: [{ key: 'blob-2', name: 'chart.png', mime: 'image/png', size: 34, kind: 'image' }],
+    settings: null,
+  });
+  assert.equal(api.entries().length, 1);
+  assert.equal(api.entries()[0].text, '');
+  assert.equal(api.entries()[0].attachments[0].kind, 'image');
+});
+
+test('structured drafts rebuild references for setDraft', () => {
+  const { api } = load();
+  const entry = {
+    text: '看看 @src/app.ts 的写法',
+    references: [
+      {
+        source: 'file',
+        ref: { path: 'src/app.ts' },
+        offset: 3,
+        length: 11,
+        label: 'app.ts',
+        clipboardText: '@src/app.ts',
+      },
+    ],
+    command: null,
+  };
+  const draft = api.draftOf(entry);
+  assert.equal(typeof draft, 'object');
+  assert.equal(draft.text, entry.text);
+  assert.equal(draft.references.length, 1);
+  assert.equal(draft.references[0].ref.path, 'src/app.ts');
 });
 
 /* --------------------------------------------------------------- recall ---- */

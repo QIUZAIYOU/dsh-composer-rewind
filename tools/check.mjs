@@ -25,6 +25,11 @@ const ALLOWED_TOKENS = new Set([
   '--dsw-alias-state-success-primary',
   '--dsw-alias-state-warn-primary',
   '--dsw-specific-sidebar-fill',
+  '--dsw-radius-md',
+  '--dsw-radius-lg',
+  '--dsw-elevation-prominent',
+  '--dsw-alias-interactive-bg-hover',
+  '--dsw-alias-label-tertiary',
 ]);
 
 const failures = [];
@@ -62,10 +67,11 @@ check('toast follows theme via data-scheme', /\.pv-toast\[data-scheme="dark"\]/.
 
 /* --------------------------------------------------------------- icon ---- */
 
-const iconPaths = source.match(/ICON_PATHS = \[([\s\S]*?)\];/);
+const iconPaths = source.match(/ACTION_PATHS = \{([\s\S]*?)\};/);
 check('icon paths declared', Boolean(iconPaths));
-check('icon paths are stroked, never filled', /style: \{ fill: 'none', stroke: 'currentColor'/.test(source));
+check('icon svg is stroked, never filled', /stroke: 'none'/.test(source) && /stroke: 'currentColor'/.test(source));
 check('icon inherits the theme text color', /stroke: 'currentColor'/.test(source));
+check('trigger icon is drawn on a 20px grid', /viewBox: '0 0 20 20'/.test(source));
 
 /* ----------------------------------------------------------- behaviour ---- */
 
@@ -80,6 +86,12 @@ check('live draft is stored separately from history', /LIVE_KEY/.test(source) &&
 check('junk filter present', /function isJunk/.test(source) && /CJK\.test/.test(source));
 check('legacy v1 entries migrate once', /LEGACY_KEY/.test(source));
 check('composer inserts through inputActions.setDraft', /setDraft\(text\)/.test(source));
+check('structured draft snapshots are supported', /function buildSnapshotFrom/.test(source) && /function referencesOf/.test(source));
+check('attachments are persisted in IndexedDB', /function idb\(/.test(source) && /BLOB_DB/.test(source) && /indexedDB\.open/.test(source));
+check('attachments restore through the conversation service', /createDrafts\(/.test(source) && /addAttachments\(/.test(source));
+check('settings restores model, permission and agent preset', /selectModel/.test(source) && /\/permission /.test(source) && /agentPresets/.test(source));
+check('hover card shows the full record', /className: 'pv-hover'/.test(source) && /pv-hover-text/.test(source));
+check('popup shell reuses the Harness MenuSurface', /dsh-client-ui-primitives/.test(source) && /MenuSurface/.test(source));
 
 /* -------------------------------------------------------------- files ---- */
 
@@ -99,6 +111,8 @@ if (manifest) {
   check('package exports locale files', manifest.exports && manifest.exports['./locale/*.json'] === './locale/*.json');
   check('bundle patch declared', Boolean(manifest.dsh && manifest.dsh.bundle && manifest.dsh.bundle.patch));
   check('client platform is web', Boolean(manifest.dsh && manifest.dsh.client && manifest.dsh.client.platform === 'web'));
+  const external = (manifest.dsh && manifest.dsh.client && manifest.dsh.client.external) || [];
+  check('client declares primitives as external', external.includes('@deepseek-ai/dsh-client-ui-primitives'));
   const listed = new Set(manifest.files || []);
   for (const required of ['index.js', 'client.js', 'cordis.patch.yml', 'locale/*.json', 'icon.svg']) {
     check('files[] lists ' + required, listed.has(required));

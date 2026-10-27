@@ -1,9 +1,26 @@
 {
-  "name": "@local/dsh-prompt-vault",
-  "version": "1.0.0",
-  "private": true,
+  "name": "dsh-prompt-vault",
+  "version": "1.1.1",
   "type": "module",
-  "description": "Composer input history for the Harness Web UI: quietly records what you type, and restores an earlier draft in one click.",
+  "description": "Composer input history for the DeepSeek Harness Web UI: records prompts, attachments, command tokens and the active DSH setup, then restores the whole composer state.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "prompt-history",
+    "composer"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QIUZAIYOU/dsh-prompt-vault.git"
+  },
+  "homepage": "https://github.com/QIUZAIYOU/dsh-prompt-vault#readme",
+  "bugs": {
+    "url": "https://github.com/QIUZAIYOU/dsh-prompt-vault/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -23,6 +40,7 @@
     "client": {
       "platform": "web",
       "immediately": true,
+      "external": ["@deepseek-ai/dsh-client-ui-primitives"],
       "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
     }
   }

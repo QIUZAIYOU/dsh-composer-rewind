@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Prompt Vault",
-    "description": "Quietly records what you type in the composer and restores any earlier draft in one click. Stored on this machine only."
+    "description": "Records prompts, attachments, @ references, / commands and the active model, thinking level, permission and agent preset, then restores the whole composer state. Stored on this machine only."
   }
 }
