@@ -2196,16 +2196,32 @@ window.__ModuleLoader__.load({
     let panelFrame = null;
 
     function measurePanelFrame() {
-      if (typeof window === 'undefined') return { left: 12, width: 360, bottom: 96, maxHeight: 420 };
+      if (typeof window === 'undefined') return { left: 12, width: 360, bottom: 96, maxHeight: 400 };
       const node = typeof document !== 'undefined' ? document.querySelector('.pv-trigger') : null;
-      const rect = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
-      const width = Math.min(860, Math.max(320, window.innerWidth - 48));
-      const left = rect
-        ? Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
-        : Math.max(12, (window.innerWidth - width) / 2);
-      const bottom = rect ? Math.max(12, window.innerHeight - rect.top + 6) : 96;
-      const above = rect ? rect.top - 24 : window.innerHeight - 140;
-      return { left, width, bottom, maxHeight: Math.max(160, Math.min(320, above)) };
+      // The `+` menu is anchored to the composer card, not to the button:
+      // same left edge, same width, 4px above the card.
+      const card = node && node.closest ? node.closest('[data-composer-card]') : null;
+      const rim = card || node;
+      const rect = rim && rim.getBoundingClientRect ? rim.getBoundingClientRect() : null;
+      if (!rect) return { left: 12, width: Math.min(360, window.innerWidth - 24), bottom: 96, maxHeight: 400 };
+      const width = Math.max(240, Math.min(rect.width, window.innerWidth - 24));
+      const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+      const bottom = Math.max(4, window.innerHeight - rect.top + 4);
+      // MenuView uses a 400px cap and keeps 84px of viewport above itself.
+      const above = rect.top - 84;
+      return { left, width, bottom, maxHeight: Math.max(160, Math.min(400, above)) };
+    }
+
+    /**
+     * The host `+` menu treats pointerdowns inside the composer card as its
+     * own and stays open. Toggle it closed before we show the history panel,
+     * otherwise both surfaces occupy the exact same frame.
+     */
+    function dismissHostMenu() {
+      if (typeof document === 'undefined') return;
+      const menu = document.querySelector('[data-trigger-menu]');
+      if (!menu || typeof document.body.dispatchEvent !== 'function') return;
+      document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true }));
     }
 
     function placeHoverCard(rect, width, height) {
@@ -2240,7 +2256,8 @@ window.__ModuleLoader__.load({
           onClick: () => {
             publishComposer(props.sessionId, props.inputActions);
             panelFrame = open ? null : measurePanelFrame();
-            setOpen(!open);
+            if (!open) dismissHostMenu();
+          setOpen(!open);
           },
         },
         h(TriggerIcon, { size: 18 }),
