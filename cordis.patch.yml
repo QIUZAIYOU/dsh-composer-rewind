@@ -1,0 +1,3 @@
+- insert:
+    - id: prompt-vault
+      name: '@local/dsh-prompt-vault'
