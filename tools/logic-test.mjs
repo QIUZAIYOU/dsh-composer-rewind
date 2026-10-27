@@ -329,6 +329,50 @@ test('recall without a composer reports instead of throwing', () => {
   assert.doesNotThrow(() => api.recallPrevious());
 });
 
+/* -------------------------------------------------------------- sessions ---- */
+
+test('history entries stay scoped to the session they belong to', () => {
+  const { api } = load();
+  api.publishComposer('s1', { setDraft() {} });
+  api.retire('session one draft', 's1');
+  api.retire('session two draft', 's2');
+  api.retire('another session one draft', 's1');
+
+  assert.equal(api.activeSession(), 's1');
+  assert.equal(
+    api.entriesForSession('s1').map((entry) => entry.text).join('|'),
+    'another session one draft|session one draft',
+  );
+  assert.equal(
+    api.entriesForSession('s2').map((entry) => entry.text).join('|'),
+    'session two draft',
+  );
+
+  api.clearSession('s1');
+  assert.equal(api.entriesForSession('s1').length, 0);
+  assert.equal(api.entriesForSession('s2').length, 1);
+});
+
+test('publishing another composer switches the active session', () => {
+  const { api } = load();
+  api.retire('first session content', 's1');
+  api.retire('second session content', 's2');
+  api.publishComposer('s2', { setDraft() {} });
+  assert.equal(api.activeSession(), 's2');
+  assert.equal(api.entries().length, 2);
+  assert.equal(api.entriesForSession('s2')[0].text, 'second session content');
+});
+
+test('ctrl+alt+z skips entries from other sessions', () => {
+  const { api } = load();
+  const applied = [];
+  api.publishComposer('s1', { setDraft: (text) => applied.push(text) });
+  api.retire('session one only', 's1');
+  api.retire('session two only', 's2');
+  api.recallPrevious();
+  assert.equal(applied[0], 'session one only');
+});
+
 /* --------------------------------------------------------------- report ---- */
 
 let failed = 0;

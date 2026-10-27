@@ -84,6 +84,33 @@ window.__ModuleLoader__.load({
         failPermission: '权限',
         failPreset: '使用模式',
         failSettings: '配置',
+        settingsNav: '输入框历史',
+        settingsTitle: '输入框历史',
+        settingsHint: '按会话查看和管理已保存的输入内容、附件与配置。',
+        settingsStatSessions: '会话',
+        settingsStatEntries: '记录',
+        settingsStatAttachments: '附件',
+        settingsStatUsage: '站点存储',
+        settingsCurrentSession: '当前会话',
+        settingsExport: '导出 JSON',
+        settingsExportHint: '只导出文字与元数据，不含附件文件。',
+        settingsClearAll: '清空全部',
+        settingsClearAllConfirm: '确认清空全部？',
+        settingsClearSessionConfirm: '确认清空？',
+        settingsClearSession: '清空此会话',
+        settingsExpand: '展开全部',
+        settingsCollapse: '收起',
+        settingsEmpty: '还没有任何会话记录。',
+        settingsNoText: '（仅附件）',
+        settingsUnknownSession: '未关联会话',
+        settingsEntryCount: '条记录',
+        settingsAttachmentsUnit: '个附件',
+        settingsLastAt: '最后',
+        settingsDeleted: '已删除',
+        settingsSessionCleared: '该会话记录已清空',
+        settingsAllCleared: '全部记录已清空',
+        settingsExported: '已开始导出',
+        settingsExportEmpty: '没有可导出的记录',
       },
       en: {
         trigger: 'Composer history',
@@ -142,6 +169,33 @@ window.__ModuleLoader__.load({
         failPermission: 'permission',
         failPreset: 'mode',
         failSettings: 'setup',
+        settingsNav: 'Composer history',
+        settingsTitle: 'Composer history',
+        settingsHint: 'Browse and manage the contents, attachments and setup saved per session.',
+        settingsStatSessions: 'Sessions',
+        settingsStatEntries: 'Entries',
+        settingsStatAttachments: 'Attachments',
+        settingsStatUsage: 'Site storage',
+        settingsCurrentSession: 'Current session',
+        settingsExport: 'Export JSON',
+        settingsExportHint: 'Text and metadata only; attachment files are not included.',
+        settingsClearAll: 'Clear all',
+        settingsClearAllConfirm: 'Clear everything?',
+        settingsClearSessionConfirm: 'Clear this session?',
+        settingsClearSession: 'Clear session',
+        settingsExpand: 'Show all',
+        settingsCollapse: 'Show less',
+        settingsEmpty: 'No session history yet.',
+        settingsNoText: '(attachments only)',
+        settingsUnknownSession: 'Unlinked session',
+        settingsEntryCount: 'entries',
+        settingsAttachmentsUnit: 'attachments',
+        settingsLastAt: 'last',
+        settingsDeleted: 'Deleted',
+        settingsSessionCleared: 'Session history cleared',
+        settingsAllCleared: 'All history cleared',
+        settingsExported: 'Export started',
+        settingsExportEmpty: 'Nothing to export',
       },
     };
 
@@ -589,6 +643,11 @@ window.__ModuleLoader__.load({
       commitEntries([]);
     }
 
+    function clearSession(sessionId) {
+      const key = sessionId || '';
+      commitEntries(entries.filter((item) => (item.sessionId || '') !== key));
+    }
+
     function patchEntryAttachments(id, info) {
       if (!Array.isArray(info) || info.length === 0) return;
       const byKey = new Map(info.map((item) => [item.key, item]));
@@ -1007,10 +1066,27 @@ window.__ModuleLoader__.load({
     let lastState = null;
     let lastCapture = null;
 
+    const sessionListeners = new Set();
+
+    function snapshotSession() {
+      return activeSessionId;
+    }
+
+    function subscribeSession(listener) {
+      sessionListeners.add(listener);
+      return () => sessionListeners.delete(listener);
+    }
+
+    function setActiveSession(sessionId) {
+      if (!sessionId || sessionId === activeSessionId) return;
+      activeSessionId = sessionId;
+      for (const listener of sessionListeners) listener();
+    }
+
     function publishComposer(sessionId, inputActions) {
       if (!sessionId || !inputActions) return;
       composerBySession.set(sessionId, inputActions);
-      activeSessionId = sessionId;
+      setActiveSession(sessionId);
     }
 
     function composerActions() {
@@ -1303,6 +1379,10 @@ window.__ModuleLoader__.load({
       return useSyncExternalStore(subscribe, snapshotEntries, snapshotEntries);
     }
 
+    function useActiveSession() {
+      return useSyncExternalStore(subscribeSession, snapshotSession, snapshotSession);
+    }
+
     function useLive() {
       return useSyncExternalStore(subscribe, snapshotLive, snapshotLive);
     }
@@ -1451,6 +1531,61 @@ window.__ModuleLoader__.load({
         if (settings.agentPreset) pieces.push(settings.agentPreset, presetLabel(settings.agentPreset));
       }
       return pieces.join(' ').toLowerCase();
+    }
+
+    function setupLine(settings) {
+      if (!settings) return '';
+      const parts = [];
+      if (settings.model && settings.model.model) parts.push(settings.model.model);
+      if (settings.permission) parts.push(permissionLabel(settings.permission));
+      if (settings.agentPreset) parts.push(presetLabel(settings.agentPreset));
+      return parts.join(' · ');
+    }
+
+    function sessionTitle(list) {
+      for (const entry of list) {
+        const text = (entry.text || '').replace(/\s+/g, ' ').trim();
+        if (text) return text.length > 30 ? text.slice(0, 30) + '…' : text;
+      }
+      return t('settingsNoText');
+    }
+
+    function sessionGroups(list) {
+      const map = new Map();
+      for (const entry of list) {
+        const id = entry.sessionId || '';
+        if (!map.has(id)) map.set(id, { id, entries: [], at: 0, attachments: 0 });
+        const group = map.get(id);
+        group.entries.push(entry);
+        group.at = Math.max(group.at, entry.at || 0);
+        group.attachments += (entry.attachments || []).length;
+      }
+      return [...map.values()].sort((a, b) => b.at - a.at);
+    }
+
+    function exportHistory() {
+      if (entries.length === 0) {
+        toast(t('settingsExportEmpty'));
+        return;
+      }
+      try {
+        const payload = {
+          plugin: 'dsh-composer-rewind',
+          schema: 3,
+          exportedAt: new Date().toISOString(),
+          entries,
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = 'composer-rewind-' + new Date().toISOString().slice(0, 10) + '.json';
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(t('settingsExported'));
+      } catch {
+        toast(t('copyFailed'));
+      }
     }
 
     /* ------------------------------------------------------------------ *
@@ -1739,6 +1874,68 @@ window.__ModuleLoader__.load({
       .pv-hint kbd{padding:0 4px!important;border:0!important;border-radius:3px!important;font-size:9px!important;
         line-height:14px!important;color:var(--dsw-alias-label-tertiary)!important;
         background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent)!important}
+
+      /* Settings page: follows the harness settings card language. */
+      .pv-set{display:flex;flex-direction:column;gap:16px;width:100%;max-width:720px;margin:0 auto;
+        padding:4px 0 24px;box-sizing:border-box;color:var(--dsw-alias-label-primary);
+        font-size:13px;line-height:1.5;text-align:left}
+      .pv-set *{box-sizing:border-box}
+      .pv-set-head h2{margin:0;font-size:16px;font-weight:600;line-height:1.4}
+      .pv-set-head p{margin:4px 0 0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}
+      .pv-set-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+      .pv-set-stat{display:flex;flex-direction:column;gap:2px;min-width:0;padding:10px 12px;
+        border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);
+        background:var(--dsw-alias-bg-layer-1)}
+      .pv-set-stat strong{font-size:16px;font-weight:600;line-height:1.3;font-variant-numeric:tabular-nums}
+      .pv-set-stat span{font-size:11px;line-height:1.4;color:var(--dsw-alias-label-tertiary);
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .pv-set-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+      .pv-set-actions-note{flex:1 1 220px;min-width:0;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+      .pv-set-btn{height:28px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);
+        border-radius:var(--dsw-radius-md,8px);background:transparent;color:var(--dsw-alias-label-primary);
+        font-size:12px;line-height:26px;cursor:pointer;white-space:nowrap}
+      .pv-set-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+      .pv-set-btn[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}
+      .pv-set-btn-small{height:24px;padding:0 8px;font-size:11px;line-height:22px}
+      .pv-set-groups{display:flex;flex-direction:column;gap:10px}
+      .pv-set-group{border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);
+        background:var(--dsw-alias-bg-layer-1);overflow:hidden}
+      .pv-set-group-head{display:flex;align-items:center;gap:8px;padding:9px 12px;
+        border-bottom:1px solid var(--dsw-alias-border-l1)}
+      .pv-set-group-title{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+      .pv-set-group-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        font-size:13px;font-weight:500}
+      .pv-set-current{flex:none;padding:0 5px;border-radius:4px;font-size:10px;line-height:16px;
+        color:var(--dsw-alias-brand-primary);
+        background:color-mix(in srgb,var(--dsw-alias-brand-primary) 12%,transparent)}
+      .pv-set-group-meta{flex:none;max-width:44%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+      .pv-set-list{list-style:none;margin:0;padding:0}
+      .pv-set-row{display:flex;align-items:flex-start;gap:8px;padding:9px 12px;
+        border-top:1px solid var(--dsw-alias-border-l1)}
+      .pv-set-row:first-child{border-top:0}
+      .pv-set-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+      .pv-set-row-main{flex:1;min-width:0}
+      .pv-set-row-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+        white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.5}
+      .pv-set-row-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:3px;font-size:11px;
+        color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+      .pv-set-remove{flex:none;width:24px;height:24px;padding:0;border:0;border-radius:5px;
+        background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;
+        display:inline-flex;align-items:center;justify-content:center}
+      .pv-set-remove:hover{color:var(--dsw-alias-state-error-primary);
+        background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent)}
+      .pv-set-more{width:100%;height:28px;border:0;border-top:1px solid var(--dsw-alias-border-l1);
+        background:transparent;color:var(--dsw-alias-label-tertiary);font-size:11px;cursor:pointer}
+      .pv-set-more:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+      .pv-set-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:42px 16px;
+        color:var(--dsw-alias-label-tertiary);border:1px solid var(--dsw-alias-border-l1);
+        border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-alias-bg-layer-1)}
+      .pv-set-empty p{margin:0;font-size:12px}
+      @media (max-width:560px){
+        .pv-set-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .pv-set-group-meta{display:none}
+      }
 
       @keyframes pv-fade{from{opacity:0}to{opacity:1}}
       @keyframes pv-pop{from{opacity:0;transform:translateY(4px) scale(.994)}to{opacity:1;transform:none}}
@@ -2088,7 +2285,6 @@ window.__ModuleLoader__.load({
       stateRef.current = { state, sessionId };
       lastState = { state, sessionId };
       lastDraft = draft;
-      activeSessionId = sessionId || activeSessionId;
 
       useEffect(() => {
         if (!sessionId) return;
@@ -2268,22 +2464,33 @@ window.__ModuleLoader__.load({
      * Panel
      * ------------------------------------------------------------------ */
 
-    const recall = { index: -1, at: 0, text: '' };
+    const recall = { index: -1, at: 0, text: '', sessionId: null };
+
+    function entriesForSession(sessionId) {
+      if (!sessionId) return entries;
+      return entries.filter((entry) => entry.sessionId === sessionId);
+    }
 
     function recallPrevious() {
-      if (entries.length === 0) {
+      const source = entriesForSession(activeSessionId);
+      if (source.length === 0) {
         toast(t('noHistory'));
         return;
       }
       const now = Date.now();
-      const sameSession = now - recall.at < 6000 && recall.text !== '' && normalize(currentDraft()) === recall.text;
-      const index = sameSession ? Math.min(entries.length - 1, recall.index + 1) : 0;
-      const entry = entries[index];
+      const sameSession =
+        now - recall.at < 6000 &&
+        recall.text !== '' &&
+        recall.sessionId === activeSessionId &&
+        normalize(currentDraft()) === recall.text;
+      const index = sameSession ? Math.min(source.length - 1, recall.index + 1) : 0;
+      const entry = source[index];
       if (insertText(entry.text)) {
         recall.index = index;
         recall.at = now;
         recall.text = entry.text;
-        toast(t('inserted') + ' ' + (index + 1) + '/' + entries.length);
+        recall.sessionId = activeSessionId;
+        toast(t('inserted') + ' ' + (index + 1) + '/' + source.length);
       } else {
         toast(t('noComposer'));
       }
@@ -2310,6 +2517,7 @@ window.__ModuleLoader__.load({
       const open = useUiOpen();
       const history = useEntries();
       const liveDraft = useLive();
+      const activeSession = useActiveSession();
       const scheme = useScheme();
       const [query, setQuery] = useState('');
       const [activeId, setActiveId] = useState(null);
@@ -2331,11 +2539,13 @@ window.__ModuleLoader__.load({
             : 0;
         const isCurrent =
           !!liveDraft &&
-          liveDraft.sessionId === activeSessionId &&
+          liveDraft.sessionId === activeSession &&
           normalize(liveDraft.text) === normalize(currentDraft()) &&
           (liveDraft.attachments || []).length === liveCount;
         const draftRow =
-          liveDraft && (liveDraft.text || (liveDraft.attachments || []).length > 0)
+          liveDraft &&
+          (!activeSession || liveDraft.sessionId === activeSession) &&
+          (liveDraft.text || (liveDraft.attachments || []).length > 0)
             ? {
                 id: '__live',
                 text: liveDraft.text,
@@ -2352,11 +2562,14 @@ window.__ModuleLoader__.load({
         // both "current draft" and the newest history entry. Show it once; the
         // history copy reappears as soon as the composer no longer holds it.
         const liveSignature = draftRow ? entrySignature(draftRow.text, draftRow.attachments) : null;
-        const list = history.filter((entry) => !liveSignature || entrySignature(entry.text, entry.attachments) !== liveSignature);
+        // Entries belong to the session they were written in; keep the panel
+        // and Ctrl+Alt+Z scoped to the session that owns the composer now.
+        const scoped = activeSession ? entriesForSession(activeSession) : history;
+        const list = scoped.filter((entry) => !liveSignature || entrySignature(entry.text, entry.attachments) !== liveSignature);
         const matches = needle ? list.filter((entry) => haystack(entry).includes(needle)) : list;
         if (draftRow && (!needle || haystack(draftRow).includes(needle))) return [draftRow, ...matches];
         return matches;
-      }, [history, liveDraft, query]);
+      }, [history, liveDraft, query, activeSession]);
 
       const groups = useMemo(() => {
         const order = [];
@@ -2711,6 +2924,195 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null, panel, h(Toast, { scheme }));
     }
 
+    /* ------------------------------------------------------------------ *
+     * Settings page
+     * ------------------------------------------------------------------ */
+
+    function SettingsPage() {
+      const history = useEntries();
+      const active = useActiveSession();
+      const [confirmAll, setConfirmAll] = useState(false);
+      const [confirmGroup, setConfirmGroup] = useState(null);
+      const [expanded, setExpanded] = useState({});
+      const [usage, setUsage] = useState(null);
+
+      useEffect(() => {
+        const nav = typeof navigator !== 'undefined' ? navigator : null;
+        if (!nav || !nav.storage || typeof nav.storage.estimate !== 'function') return undefined;
+        let alive = true;
+        nav.storage.estimate().then(
+          (value) => {
+            if (alive) setUsage(value && typeof value.usage === 'number' ? value.usage : null);
+          },
+          () => {},
+        );
+        return () => {
+          alive = false;
+        };
+      }, [history]);
+
+      const groups = useMemo(() => sessionGroups(history), [history]);
+      const attachmentCount = history.reduce((sum, entry) => sum + (entry.attachments || []).length, 0);
+
+      const clearGroup = (id) => {
+        if (confirmGroup !== id) {
+          setConfirmGroup(id);
+          return;
+        }
+        clearSession(id);
+        setConfirmGroup(null);
+        setExpanded((value) => ({ ...value, [id]: false }));
+        toast(t('settingsSessionCleared'));
+      };
+
+      const clearEverything = () => {
+        if (!confirmAll) {
+          setConfirmAll(true);
+          return;
+        }
+        clearAll();
+        setConfirmAll(false);
+        setExpanded({});
+        toast(t('settingsAllCleared'));
+      };
+
+      const stat = (label, value) =>
+        h(
+          'div',
+          { className: 'pv-set-stat', key: label },
+          h('strong', null, value),
+          h('span', null, label),
+        );
+
+      return h(
+        'div',
+        { className: 'pv-set' },
+        h(
+          'header',
+          { className: 'pv-set-head' },
+          h('h2', null, t('settingsTitle')),
+          h('p', null, t('settingsHint')),
+        ),
+        h(
+          'div',
+          { className: 'pv-set-stats' },
+          stat(t('settingsStatSessions'), String(groups.length)),
+          stat(t('settingsStatEntries'), String(history.length)),
+          stat(t('settingsStatAttachments'), String(attachmentCount)),
+          stat(t('settingsStatUsage'), usage == null ? '—' : usage === 0 ? '0 B' : formatBytes(usage)),
+        ),
+        h(
+          'div',
+          { className: 'pv-set-actions' },
+          h('span', { className: 'pv-set-actions-note' }, t('settingsExportHint')),
+          h(
+            'button',
+            { type: 'button', className: 'pv-set-btn', onClick: exportHistory },
+            t('settingsExport'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'pv-set-btn',
+              'data-danger': 'true',
+              onClick: clearEverything,
+            },
+            confirmAll ? t('settingsClearAllConfirm') : t('settingsClearAll'),
+          ),
+        ),
+        groups.length === 0
+          ? h('div', { className: 'pv-set-empty' }, h(Icon, { paths: ACTION_PATHS.search, size: 20 }), h('p', null, t('settingsEmpty')))
+          : h(
+              'div',
+              { className: 'pv-set-groups' },
+              groups.map((group) => {
+                const openGroup = !!expanded[group.id];
+                const shown = openGroup ? group.entries : group.entries.slice(0, 6);
+                return h(
+                  'section',
+                  { className: 'pv-set-group', key: group.id || 'unknown' },
+                  h(
+                    'div',
+                    { className: 'pv-set-group-head' },
+                    h(
+                      'div',
+                      { className: 'pv-set-group-title' },
+                      h('span', { className: 'pv-set-group-name' }, group.id ? sessionTitle(group.entries) : t('settingsUnknownSession')),
+                      group.id === active && group.id ? h('span', { className: 'pv-set-current' }, t('settingsCurrentSession')) : null,
+                    ),
+                    h(
+                      'span',
+                      { className: 'pv-set-group-meta' },
+                      group.entries.length + ' ' + t('settingsEntryCount') +
+                        (group.attachments ? ' · ' + group.attachments + ' ' + t('settingsAttachmentsUnit') : '') +
+                        ' · ' + t('settingsLastAt') + ' ' + formatTime(group.at) +
+                        (group.id ? ' · #' + group.id.slice(0, 8) : ''),
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'pv-set-btn pv-set-btn-small',
+                        onClick: () => clearGroup(group.id),
+                      },
+                      confirmGroup === group.id ? t('settingsClearSessionConfirm') : t('settingsClearSession'),
+                    ),
+                  ),
+                  h(
+                    'ul',
+                    { className: 'pv-set-list' },
+                    shown.map((entry) =>
+                      h(
+                        'li',
+                        { className: 'pv-set-row', key: entry.id },
+                        h(
+                          'div',
+                          { className: 'pv-set-row-main' },
+                          h('div', { className: 'pv-set-row-text' }, entry.text || t('settingsNoText')),
+                          h(
+                            'div',
+                            { className: 'pv-set-row-meta' },
+                            h('span', null, formatTime(entry.at)),
+                            entry.attachments && entry.attachments.length
+                              ? h('span', null, entry.attachments.length + ' ' + t('settingsAttachmentsUnit'))
+                              : null,
+                            setupLine(entry.settings) ? h('span', null, setupLine(entry.settings)) : null,
+                          ),
+                        ),
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'pv-set-remove',
+                            'aria-label': t('remove'),
+                            onClick: () => {
+                              removeEntry(entry.id);
+                              toast(t('settingsDeleted'));
+                            },
+                          },
+                          h(Icon, { paths: ACTION_PATHS.trash, size: 14 }),
+                        ),
+                      ),
+                    ),
+                  ),
+                  group.entries.length > 6
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'pv-set-more',
+                          onClick: () => setExpanded((value) => ({ ...value, [group.id]: !openGroup })),
+                        },
+                        openGroup ? t('settingsCollapse') : t('settingsExpand'),
+                      )
+                    : null,
+                );
+              }),
+            ),
+      );
+    }
+
     function Toast(props) {
       const message = useToast();
       if (!message) return null;
@@ -2730,8 +3132,12 @@ window.__ModuleLoader__.load({
         setLive,
         setLiveSnapshot,
         clearAll,
+        clearSession,
         removeEntry,
         publishComposer,
+        setActiveSession,
+        activeSession: () => activeSessionId,
+        entriesForSession,
         insertText,
         recallPrevious,
         currentDraft,
@@ -2769,6 +3175,17 @@ window.__ModuleLoader__.load({
         );
         ctx.slots.inject('shell.overlay', () =>
           ctx.slots.register({ name: 'shell.overlay', id: 'composer-rewind-panel', order: 90 }, Panel),
+        );
+        ctx.slots.inject('settings.section', () =>
+          ctx.slots.register(
+            {
+              name: 'settings.section',
+              id: 'composer-rewind-settings',
+              order: 30,
+              label: () => t('settingsNav'),
+            },
+            SettingsPage,
+          ),
         );
         // Release object URLs when the page goes away.
         if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {

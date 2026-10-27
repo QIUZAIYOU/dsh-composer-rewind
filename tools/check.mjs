@@ -92,6 +92,9 @@ check('attachments restore through the conversation service', /createDrafts\(/.t
 check('settings restores model, permission and agent preset', /selectModel/.test(source) && /\/permission /.test(source) && /agentPresets/.test(source));
 check('hover card shows the full record', /className: 'pv-hover'/.test(source) && /pv-hover-text/.test(source));
 check('popup shell reuses the Harness MenuSurface', /dsh-client-ui-primitives/.test(source) && /MenuSurface/.test(source));
+check('history is scoped to the active session', /function entriesForSession/.test(source) && /activeSession/.test(source));
+check('settings page registered as a standalone section', /name: 'settings\.section'/.test(source) && /composer-rewind-settings/.test(source));
+check('settings page can clear one session', /function clearSession/.test(source) && /function SettingsPage/.test(source));
 
 /* -------------------------------------------------------------- files ---- */
 
