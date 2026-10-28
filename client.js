@@ -881,20 +881,49 @@ window.__ModuleLoader__.load({
 
     function liveSessionOf(sessionId) {
       const sessions = sessionsService();
-      if (!sessions || !sessionId || typeof sessions.binding !== 'function') return null;
+      if (!sessions || !sessionId) return null;
       try {
-        return sessions.binding(sessionId)?.session || null;
+        // 0.2.x: the binding only exists for a retained generation, and its
+        // `session` is the live Session object.
+        if (typeof sessions.binding === 'function') {
+          const bound = sessions.binding(sessionId)?.session;
+          if (bound) return bound;
+        }
+        // Fallback: resolve the live Session back from the session scope.
+        if (typeof sessions.scope === 'function' && typeof sessions.sessionOf === 'function') {
+          const scope = sessions.scope(sessionId);
+          if (scope) return sessions.sessionOf(scope) || null;
+        }
       } catch {
-        return null;
+        /* ignore */
       }
+      return null;
     }
 
     function projectionOf(session, name) {
+      const projections = session && session.projections;
+      if (!projections) return null;
       try {
-        return session?.projections?.faceOf?.(name)?.getSnapshot?.() ?? null;
+        const face = typeof projections.faceOf === 'function' ? projections.faceOf(name) : null;
+        if (face) return face.getSnapshot?.() ?? null;
+        // ProjectionValueStore also exposes a direct read.
+        if (typeof projections.get === 'function') return projections.get(name) ?? null;
       } catch {
-        return null;
+        /* ignore */
       }
+      return null;
+    }
+
+    function sessionIsBlank(session) {
+      if (!session) return false;
+      try {
+        // 0.2.x carries `blank` on the session snapshot.
+        if (session.getSnapshot?.()?.blank === true) return true;
+      } catch {
+        /* ignore */
+      }
+      if (session.blank === true) return true;
+      return typeof session.blank === 'function' && session.blank() === true;
     }
 
     function readSettings(sessionId) {
@@ -917,8 +946,8 @@ window.__ModuleLoader__.load({
         agentPreset:
           typeof preset === 'string'
             ? preset
-            : typeof session?.projectionValues?.agentPreset === 'string'
-              ? session.projectionValues.agentPreset
+            : typeof session?.projections?.values?.()?.agentPreset === 'string'
+              ? session.projections.values().agentPreset
               : null,
       });
     }
@@ -944,11 +973,6 @@ window.__ModuleLoader__.load({
     async function applySettings(settings, sessionId) {
       const failures = [];
       if (!settings || !sessionId) return failures;
-      const sessions = sessionsService();
-      if (!sessions) {
-        failures.push('settings');
-        return failures;
-      }
 
       // 1. Agent preset first: it can only change on a blank session, and a
       //    successful switch may recreate the session that the other writes
@@ -956,13 +980,10 @@ window.__ModuleLoader__.load({
       if (settings.agentPreset) {
         try {
           const session = liveSessionOf(sessionId);
-          const current =
-            projectionOf(session, 'agentPreset') ||
-            (session && session.projectionValues ? session.projectionValues.agentPreset : null);
+          const current = projectionOf(session, 'agentPreset');
           if (session && current !== settings.agentPreset) {
-            const blank = session.blank === true || (typeof session.blank === 'function' && session.blank());
             const remote = runtime && runtime.remote;
-            if (blank && remote && remote.agentPresets && typeof remote.agentPresets.select === 'function') {
+            if (sessionIsBlank(session) && remote && remote.agentPresets && typeof remote.agentPresets.select === 'function') {
               const result = await remote.agentPresets.select(sessionId, settings.agentPreset);
               if (result && result.ok === false) failures.push('preset');
             } else {
@@ -974,20 +995,29 @@ window.__ModuleLoader__.load({
         }
       }
 
-      // 2. Model + reasoning effort.
+      // 2. Model + reasoning effort, through the remote session face.
       if (settings.model && settings.model.model) {
         try {
-          if (typeof sessions.selectModel !== 'function') {
-            failures.push('model');
+          const remoteSession = runtime && runtime.remote && runtime.remote.session;
+          const selection = {
+            sessionId,
+            provider: settings.model.provider,
+            model: settings.model.model,
+            ...(settings.model.reasoningEffort ? { reasoningEffort: settings.model.reasoningEffort } : {}),
+          };
+          let result = null;
+          if (remoteSession && typeof remoteSession.selectModel === 'function') {
+            result = await remoteSession.selectModel(selection);
           } else {
-            const result = await sessions.selectModel({
-              sessionId,
-              provider: settings.model.provider,
-              model: settings.model.model,
-              ...(settings.model.reasoningEffort ? { reasoningEffort: settings.model.reasoningEffort } : {}),
-            });
-            if (result && result.ok === false) failures.push('model');
+            // Older builds exposed the write on the sessions service instead.
+            const sessions = sessionsService();
+            if (sessions && typeof sessions.selectModel === 'function') {
+              result = await sessions.selectModel(selection);
+            } else {
+              failures.push('model');
+            }
           }
+          if (result && result.ok === false) failures.push('model');
         } catch {
           failures.push('model');
         }
@@ -3167,6 +3197,13 @@ window.__ModuleLoader__.load({
         permissionLabel,
         presetLabel,
         placeHoverCard,
+        readSettings,
+        applySettings,
+        sessionIsBlank,
+        liveSessionOf,
+        setRuntime: (value) => {
+          runtime = value;
+        },
         reset: () => {
           entries = [];
           live = null;

@@ -105,14 +105,22 @@ function load(seed) {
   return { api: window.__PV_TEST__.api, storage };
 }
 
+/** Strip the vm realm from a value so assert.deepEqual can compare it. */
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
 const results = [];
+const pending = [];
 function test(name, fn) {
-  try {
-    fn();
-    results.push(['ok  ', name]);
-  } catch (error) {
-    results.push(['FAIL', name + ' — ' + error.message]);
-  }
+  pending.push(
+    (async () => {
+      try {
+        await fn();
+        results.push(['ok  ', name]);
+      } catch (error) {
+        results.push(['FAIL', name + ' — ' + error.message]);
+      }
+    })(),
+  );
 }
 
 /* ---------------------------------------------------------------- junk ---- */
@@ -381,7 +389,137 @@ test('legacy entries without a session are adopted by the first session', () => 
   assert.equal(api.entriesForSession('s1').length, 1);
 });
 
+/* ------------------------------------------------------------- settings ---- */
+
+/**
+ * Fake DSH 0.2.x host: the sessions service only offers `binding`, the live
+ * session exposes `getSnapshot()`/`projections`, and model writes go through
+ * `remote.session.selectModel`.
+ */
+function fakeHost(options = {}) {
+  const { blank = true, preset = null, model = null, permission = null, rejectModel = false, binding = true } = options;
+  const calls = [];
+  const values = {
+    modelSelection: model ? { lastUsed: model } : undefined,
+    permissions: permission ? { currentValue: permission } : undefined,
+    agentPreset: preset === null ? undefined : preset,
+  };
+  const session = {
+    getSnapshot: () => ({ blank }),
+    projections: {
+      faceOf: (name) => ({ getSnapshot: () => values[name] }),
+      get: (name) => values[name],
+    },
+    command: async (line) => {
+      calls.push(['command', line]);
+      return { ok: true, value: { matched: true } };
+    },
+  };
+  const sessions = {
+    binding: (id) => (binding ? { sessionId: id, session } : undefined),
+    scope: () => (binding ? null : { scoped: true }),
+    sessionOf: () => session,
+  };
+  const runtime = {
+    get: (name) => (name === 'sessions' ? sessions : null),
+    remote: {
+      agentPresets: {
+        select: async (id, next) => {
+          calls.push(['preset', id, next]);
+          return { ok: true };
+        },
+      },
+      session: {
+        selectModel: async (selection) => {
+          calls.push(['model', selection]);
+          return rejectModel ? { ok: false, error: { code: 'model/unknown', message: 'nope' } } : { ok: true };
+        },
+      },
+    },
+  };
+  return { runtime, calls, session };
+}
+
+test('reads model, permission and preset from the session projections', () => {
+  const { api } = load();
+  const { runtime } = fakeHost({
+    preset: 'craft',
+    permission: 'acceptEdits',
+    model: { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' },
+  });
+  api.setRuntime(runtime);
+  assert.deepEqual(plain(api.readSettings('s1')), {
+    model: { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' },
+    permission: 'acceptEdits',
+    agentPreset: 'craft',
+  });
+});
+
+test('liveSessionOf falls back to the session scope when nothing is bound', () => {
+  const { api } = load();
+  const { runtime, session } = fakeHost({ binding: false });
+  api.setRuntime(runtime);
+  assert.equal(api.liveSessionOf('s1'), session);
+});
+
+test('blank detection reads the session snapshot, not the legacy flag', () => {
+  const { api } = load();
+  assert.equal(api.sessionIsBlank({ getSnapshot: () => ({ blank: true }), blank: false }), true);
+  assert.equal(api.sessionIsBlank({ getSnapshot: () => ({ blank: false }) }), false);
+  assert.equal(api.sessionIsBlank({ blank: true }), true, 'legacy builds still work');
+  assert.equal(api.sessionIsBlank(null), false);
+});
+
+test('model and permission restore through the 0.2.x write paths', async () => {
+  const { api } = load();
+  const { runtime, calls } = fakeHost({ blank: true, permission: 'ask' });
+  api.setRuntime(runtime);
+  const failures = await api.applySettings(
+    { model: { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' }, permission: 'acceptEdits' },
+    's1',
+  );
+  assert.deepEqual(plain(failures), []);
+  assert.deepEqual(plain(calls[0]), [
+    'model',
+    { sessionId: 's1', provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'high' },
+  ]);
+  assert.deepEqual(plain(calls[1]), ['command', '/permission acceptEdits']);
+});
+
+test('the agent preset only switches on a blank session', async () => {
+  const { api } = load();
+  const started = fakeHost({ blank: false });
+  api.setRuntime(started.runtime);
+  assert.deepEqual(plain(await api.applySettings({ agentPreset: 'craft' }, 's1')), ['preset']);
+  assert.equal(
+    started.calls.some(([kind]) => kind === 'preset'),
+    false,
+    'a started session must not be switched',
+  );
+
+  const blank = fakeHost({ blank: true, preset: 'default' });
+  api.setRuntime(blank.runtime);
+  assert.deepEqual(plain(await api.applySettings({ agentPreset: 'craft' }, 's1')), []);
+  assert.deepEqual(plain(blank.calls[0]), ['preset', 's1', 'craft']);
+});
+
+test('a rejected model write is reported, not swallowed', async () => {
+  const { api } = load();
+  const { runtime } = fakeHost({ rejectModel: true });
+  api.setRuntime(runtime);
+  assert.deepEqual(plain(await api.applySettings({ model: { provider: 'p', model: 'm' } }, 's1')), ['model']);
+});
+
+test('settings restore degrades gracefully without a host runtime', async () => {
+  const { api } = load();
+  api.setRuntime(null);
+  assert.deepEqual(plain(await api.applySettings({ model: { provider: 'p', model: 'm' } }, 's1')), ['model']);
+  assert.equal(api.readSettings('s1'), null);
+});
+
 /* --------------------------------------------------------------- report ---- */
+
+await Promise.all(pending);
 
 let failed = 0;
 for (const [status, name] of results) {

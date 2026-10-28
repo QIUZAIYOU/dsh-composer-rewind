@@ -1,6 +1,6 @@
 {
   "name": "dsh-composer-rewind",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "type": "module",
   "description": "Per-session composer input history for the DeepSeek Harness Web UI: records composer contents, attachments, command tokens and the active DSH setup, restores the whole composer state, and manages history per session from a settings page.",
   "keywords": [

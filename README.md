@@ -4,6 +4,12 @@ Composer Rewind 是 DeepSeek Harness Web UI 的输入框状态历史插件。它
 
 所有数据只保存在本机浏览器，不上传、不写日志、不进会话记录。
 
+## 兼容性
+
+- 当前适配 **DeepSeek Harness 0.2.1-rc.3**（客户端插件协议：`window.__ModuleLoader__` + Cordis 4 服务）。
+- 0.2.x 的服务访问、插槽注册、`inputActions.setDraft`、`conversation.createDrafts`、`remote.agentPresets.select`、`/permission` 指令均按该版本校验通过。
+- 设置还原改用 0.2.x 的写入路径：模型走 `remote.session.selectModel`，空白会话判定走 `session.getSnapshot().blank`，不再依赖已移除的 `sessions.selectModel` 与 `session.projectionValues`（旧版本仍保留回退分支）。
+
 ## 功能
 
 - **完整记录**：输入框里的文字、图片和文件附件、@ 引用、/ 指令，以及当时的 DSH 配置。

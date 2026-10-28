@@ -90,6 +90,9 @@ check('structured draft snapshots are supported', /function buildSnapshotFrom/.t
 check('attachments are persisted in IndexedDB', /function idb\(/.test(source) && /BLOB_DB/.test(source) && /indexedDB\.open/.test(source));
 check('attachments restore through the conversation service', /createDrafts\(/.test(source) && /addAttachments\(/.test(source));
 check('settings restores model, permission and agent preset', /selectModel/.test(source) && /\/permission /.test(source) && /agentPresets/.test(source));
+check('model restore goes through the remote session face', /remote\.session/.test(source) && /remoteSession\.selectModel/.test(source));
+check('blank sessions are detected from the session snapshot', /function sessionIsBlank/.test(source) && /getSnapshot\?\.\(\)\?\.blank === true/.test(source));
+check('settings restore does not depend on the sessions service alone', /function applySettings/.test(source) && !/if \(!sessions\) \{\s*failures\.push\('settings'\)/.test(source));
 check('hover card shows the full record', /className: 'pv-hover'/.test(source) && /pv-hover-text/.test(source));
 check('popup shell reuses the Harness MenuSurface', /dsh-client-ui-primitives/.test(source) && /MenuSurface/.test(source));
 check('history is scoped to the active session', /function entriesForSession/.test(source) && /activeSession/.test(source));
