@@ -517,6 +517,63 @@ test('settings restore degrades gracefully without a host runtime', async () => 
   assert.equal(api.readSettings('s1'), null);
 });
 
+/* ---------------------------------------------------------------- restore -- */
+
+test('restore sanitises the recorded file name and mime', () => {
+  const { api } = load();
+  assert.equal(api.safeFileName('..\\..\\etc\\passwd'), 'passwd');
+  assert.equal(api.safeFileName('a' + String.fromCharCode(9) + 'b.png'), 'ab.png');
+  assert.equal(api.safeFileName('   '), 'file');
+  assert.equal(api.safeFileName('..'), 'file');
+  assert.equal(api.safeMimeType('image/png'), 'image/png');
+  assert.equal(api.safeMimeType('IMAGE/PNG'), 'image/png');
+  assert.equal(api.safeMimeType('text/plain; charset=utf-8'), '');
+  assert.equal(api.safeMimeType('javascript:alert(1)'), '');
+});
+
+test('setup restore reports the session the writes landed on', async () => {
+  const { api } = load();
+  const { runtime } = fakeHost({ model: { provider: 'deepseek', model: 'deepseek-v4' } });
+  api.setRuntime(runtime);
+  const applied = await api.applySettingsTo(
+    { model: { provider: 'deepseek', model: 'deepseek-v4' }, permission: 'plan', agentPreset: null },
+    's9',
+  );
+  assert.equal(applied.sessionId, 's9');
+  assert.deepEqual(plain(applied.failures), []);
+});
+
+/* ----------------------------------------------------------------- store -- */
+
+test('typing coalesces the history write, structural changes do not', () => {
+  const { api, storage } = load();
+  api.retire('帮我写一个周报', 's1');
+  assert.equal(JSON.parse(storage.getItem('dsh-composer-rewind:v3')).length, 1);
+  api.retire('帮我写一个周报，加上本周进展', 's1');
+  assert.equal(api.entries().length, 1);
+  assert.match(api.entries()[0].text, /本周进展$/);
+  assert.equal(JSON.parse(storage.getItem('dsh-composer-rewind:v3'))[0].text, '帮我写一个周报', 'debounced');
+  api.flushCommit();
+  assert.match(JSON.parse(storage.getItem('dsh-composer-rewind:v3'))[0].text, /本周进展$/);
+});
+
+test('a full storage quota sheds the oldest quarter instead of throwing', () => {
+  const { api, storage } = load();
+  const write = storage.setItem;
+  let full = true;
+  storage.setItem = (key, value) => {
+    if (full) throw new Error('QuotaExceededError');
+    return write(key, value);
+  };
+  for (let index = 0; index < 8; index += 1) api.retire('用于填充历史的记录 ' + index, 's1');
+  assert.ok(api.entries().length > 0, 'history survives a failed write');
+  assert.ok(api.entries().length < 8, 'the oldest entries are shed');
+  full = false;
+  api.retire('配额恢复后的新记录', 's1');
+  assert.equal(api.entries()[0].text, '配额恢复后的新记录');
+  assert.ok(storage.getItem('dsh-composer-rewind:v3'), 'persists again once the quota frees up');
+});
+
 /* --------------------------------------------------------------- report ---- */
 
 await Promise.all(pending);

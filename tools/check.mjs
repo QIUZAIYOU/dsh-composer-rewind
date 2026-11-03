@@ -98,6 +98,24 @@ check('popup shell reuses the Harness MenuSurface', /dsh-client-ui-primitives/.t
 check('history is scoped to the active session', /function entriesForSession/.test(source) && /activeSession/.test(source));
 check('settings page registered as a standalone section', /name: 'settings\.section'/.test(source) && /composer-rewind-settings/.test(source));
 check('settings page can clear one session', /function clearSession/.test(source) && /function SettingsPage/.test(source));
+check('a failed history write is reported, not swallowed', /function reportStorageError/.test(source) && (source.match(/storageFull:/g) || []).length === 2);
+check(
+  'typing coalesces history writes instead of rewriting the list',
+  /urgent: false/.test(source) && /COMMIT_DEBOUNCE_MS/.test(source) && /function flushCommit/.test(source),
+);
+check('a closed database is retried instead of remembered', /if \(!db\) dbPromise = null/.test(source));
+check('blob pruning cannot delete a fresh upload', /PRUNE_GRACE_MS/.test(source));
+check(
+  'restore follows a session rebuilt by a preset switch',
+  /function applySettingsTo/.test(source) && /function waitForActions/.test(source) && /resolveSessionAfterPreset/.test(source),
+);
+check('restore never writes into another session composer', /function sessionForActions/.test(source));
+check('recorded file names are sanitised on restore', /function safeFileName/.test(source) && /function safeMimeType/.test(source));
+check('preview urls are bounded', /BLOB_URL_LIMIT/.test(source) && /function rememberBlobUrl/.test(source));
+check(
+  'unload listener is owned by the fiber',
+  /ctx\.effect\(\(\) => \{\s*if \(typeof window === 'undefined'/.test(source),
+);
 
 /* -------------------------------------------------------------- files ---- */
 

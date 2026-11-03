@@ -111,6 +111,7 @@ window.__ModuleLoader__.load({
         settingsAllCleared: '全部记录已清空',
         settingsExported: '已开始导出',
         settingsExportEmpty: '没有可导出的记录',
+        storageFull: '本地存储已满，最早的历史条目已被丢弃',
       },
       en: {
         trigger: 'Composer history',
@@ -196,6 +197,7 @@ window.__ModuleLoader__.load({
         settingsAllCleared: 'All history cleared',
         settingsExported: 'Export started',
         settingsExportEmpty: 'Nothing to export',
+        storageFull: 'Local storage is full — the oldest entries were dropped',
       },
     };
 
@@ -278,6 +280,11 @@ window.__ModuleLoader__.load({
     const HOLD_MS = 450;
     const MAX_ATTACHMENTS = 20;
     const MAX_BLOB_BYTES = 32 * 1024 * 1024;
+    const COMMIT_DEBOUNCE_MS = 800;
+    const PRUNE_GRACE_MS = 60 * 1000;
+    const BLOB_URL_LIMIT = 48;
+    const SEP = String.fromCharCode(2);
+    const SIG_SEP = String.fromCharCode(1);
     const CJK = /[\u3400-\u9fff\uf900-\ufaff]/;
 
     // Kept from the previous package name so already-cached attachment bytes stay reachable.
@@ -310,18 +317,44 @@ window.__ModuleLoader__.load({
     function readRaw(key) {
       try {
         const raw = window.localStorage.getItem(key);
-        return raw ? JSON.parse(raw) : null;
+        if (!raw) return null;
+        return JSON.parse(raw);
       } catch {
+        // Corrupt payload: treat it as empty so the next write replaces it.
         return null;
+      }
+    }
+
+    let storageErrorReported = false;
+
+    function reportStorageError() {
+      if (storageErrorReported) return;
+      storageErrorReported = true;
+      try {
+        toast(t('storageFull'));
+      } catch {
+        /* the toast needs the UI; reporting must never break a write */
       }
     }
 
     function writeRaw(key, value) {
       try {
         window.localStorage.setItem(key, JSON.stringify(value));
+        return true;
       } catch {
-        /* quota / private mode: the in-memory copy keeps the panel usable */
+        // Quota exceeded or private mode: the caller decides what to do.
+        return false;
       }
+    }
+
+    /** Persist the history, shedding the oldest quarter once if the quota is full. */
+    function writeEntries() {
+      if (writeRaw(STORAGE_KEY, entries)) return true;
+      if (entries.length > 1) {
+        entries = entries.slice(0, Math.max(1, Math.floor(entries.length * 0.75)));
+        if (writeRaw(STORAGE_KEY, entries)) return true;
+      }
+      return false;
     }
 
     function clone(value) {
@@ -365,6 +398,7 @@ window.__ModuleLoader__.load({
           kind: item.kind === 'image' ? 'image' : 'file',
           ...(typeof item.width === 'number' ? { width: item.width } : {}),
           ...(typeof item.height === 'number' ? { height: item.height } : {}),
+          ...(typeof item.lastModified === 'number' ? { lastModified: item.lastModified } : {}),
           ...(item.pending === true ? { pending: true } : {}),
           ...(item.missing === true ? { missing: true } : {}),
         });
@@ -412,7 +446,8 @@ window.__ModuleLoader__.load({
      * on the record for restore and blob lookup.
      */
     function attachmentFingerprint(item) {
-      return [item.kind || 'file', item.name || 'file', item.size || 0].join('');
+      return [item.kind || 'file', item.name || 'file', item.size || 0, item.mime || '', item.lastModified || 0]
+        .join(SEP);
     }
 
     function attachmentKeys(attachments) {
@@ -524,11 +559,36 @@ window.__ModuleLoader__.load({
       return live;
     }
 
-    function commitEntries(next) {
+    let commitTimer = null;
+
+    function commitEntries(next, options) {
+      const urgent = !options || options.urgent !== false;
       entries = next.slice(0, MAX_ENTRIES);
-      writeRaw(STORAGE_KEY, entries);
+      if (urgent) flushCommit();
+      else scheduleCommit();
       emit();
       schedulePrune();
+    }
+
+    /** Typing refreshes the head entry on every pause; coalesce those writes. */
+    function scheduleCommit() {
+      if (commitTimer) return;
+      commitTimer = window.setTimeout(() => {
+        commitTimer = null;
+        persistEntries();
+      }, COMMIT_DEBOUNCE_MS);
+    }
+
+    function flushCommit() {
+      if (commitTimer) {
+        window.clearTimeout(commitTimer);
+        commitTimer = null;
+      }
+      persistEntries();
+    }
+
+    function persistEntries() {
+      if (!writeEntries()) reportStorageError();
     }
 
     function setLiveSnapshot(raw) {
@@ -584,7 +644,7 @@ window.__ModuleLoader__.load({
           attachments: fresh.attachments,
           settings: fresh.settings || head.settings,
         };
-        commitEntries([refreshed, ...entries.slice(1)]);
+        commitEntries([refreshed, ...entries.slice(1)], { urgent: false });
         return true;
       }
 
@@ -593,12 +653,14 @@ window.__ModuleLoader__.load({
         // Typing more of the same draft: replace the head so references,
         // attachments and setup all describe the newest revision.
         if (sameAttachments && text.startsWith(head.text)) {
-          commitEntries([{ ...fresh, id: head.id }, ...entries.slice(1)]);
+          commitEntries([{ ...fresh, id: head.id }, ...entries.slice(1)], { urgent: false });
           return true;
         }
         // Backspacing inside a draft we already hold: keep the fuller head.
         if (sameAttachments && head.text.startsWith(text)) {
-          commitEntries([{ ...head, at: now, settings: fresh.settings || head.settings }, ...entries.slice(1)]);
+          commitEntries([{ ...head, at: now, settings: fresh.settings || head.settings }, ...entries.slice(1)], {
+            urgent: false,
+          });
           return true;
         }
       }
@@ -666,6 +728,25 @@ window.__ModuleLoader__.load({
       if (changed) commitEntries(next);
     }
 
+    /** Update every entry that still holds one of these ids, in one commit. */
+    function patchAttachmentsByIds(ids, info) {
+      if (!Array.isArray(info) || info.length === 0) return;
+      const byKey = new Map(info.map((item) => [item.key, item]));
+      let changed = false;
+      const next = entries.map((entry) => {
+        if (!entry.attachments.some((item) => byKey.has(item.key) && ids.includes(item.key))) return entry;
+        changed = true;
+        return {
+          ...entry,
+          attachments: entry.attachments.map((item) => {
+            const found = byKey.get(item.key);
+            return found ? { ...found, key: item.key } : item;
+          }),
+        };
+      });
+      if (changed) commitEntries(next);
+    }
+
     function patchLiveAttachments(sessionId, info) {
       if (!live || !Array.isArray(info) || info.length === 0) return;
       if (sessionId && live.sessionId !== sessionId) return;
@@ -698,7 +779,7 @@ window.__ModuleLoader__.load({
     function idb() {
       if (typeof window === 'undefined' || typeof window.indexedDB === 'undefined') return Promise.resolve(null);
       if (dbPromise) return dbPromise;
-      dbPromise = new Promise((resolve) => {
+      const pending = new Promise((resolve) => {
         let request;
         try {
           request = window.indexedDB.open(BLOB_DB, 1);
@@ -710,9 +791,26 @@ window.__ModuleLoader__.load({
           const db = request.result;
           if (!db.objectStoreNames.contains(BLOB_STORE)) db.createObjectStore(BLOB_STORE, { keyPath: 'id' });
         };
-        request.onsuccess = () => resolve(request.result);
+        request.onsuccess = () => {
+          const db = request.result;
+          // Another tab upgrading the schema: close, then let the next call reopen.
+          db.onversionchange = () => {
+            try {
+              db.close();
+            } catch {
+              /* ignore */
+            }
+            dbPromise = null;
+          };
+          resolve(db);
+        };
         request.onerror = () => resolve(null);
         request.onblocked = () => resolve(null);
+      });
+      dbPromise = pending.then((db) => {
+        // A transient failure must stay retryable for the life of the page.
+        if (!db) dbPromise = null;
+        return db;
       });
       return dbPromise;
     }
@@ -757,7 +855,7 @@ window.__ModuleLoader__.load({
     }
 
     function schedulePrune() {
-      if (pruneTimer || prunePending) return;
+      if (prunePending) return;
       prunePending = true;
       const run = () => {
         prunePending = false;
@@ -765,29 +863,71 @@ window.__ModuleLoader__.load({
         pruneBlobs();
       };
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(run, { timeout: 4000 });
-      } else {
+        pruneTimer = window.requestIdleCallback(run, { timeout: 4000 });
+      } else if (typeof window !== 'undefined') {
         pruneTimer = window.setTimeout(run, 1500);
+      } else {
+        run();
       }
     }
 
     function pruneBlobs() {
-      const keep = referencedBlobKeys();
       return idb().then((db) => {
-        if (!db) return;
-        try {
-          const store = db.transaction(BLOB_STORE, 'readwrite').objectStore(BLOB_STORE);
-          const cursor = store.openCursor();
+        if (!db) return undefined;
+        return new Promise((resolve) => {
+          let transaction;
+          try {
+            transaction = db.transaction(BLOB_STORE, 'readwrite');
+          } catch {
+            resolve();
+            return;
+          }
+          // Snapshot the references in the same task that opens the cursor,
+          // and never reclaim a byte written in the last minute: a restore may
+          // be re-adding a key that history does not reference yet.
+          const keep = referencedBlobKeys();
+          const cutoff = Date.now() - PRUNE_GRACE_MS;
+          const cursor = transaction.objectStore(BLOB_STORE).openCursor();
           cursor.onsuccess = () => {
             const row = cursor.result;
             if (!row) return;
-            if (!keep.has(row.value.id)) row.delete();
+            const value = row.value || {};
+            const at = typeof value.at === 'number' ? value.at : 0;
+            if (!keep.has(value.id) && at < cutoff) row.delete();
             row.continue();
           };
-        } catch {
-          /* ignore */
-        }
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => resolve();
+          transaction.onabort = () => resolve();
+        });
       });
+    }
+
+    /**
+     * A recorded name is only a chip label, but it comes back from storage:
+     * drop any path component and control characters before handing it to File.
+     */
+    function safeFileName(raw) {
+      const value = String(raw == null ? '' : raw);
+      const cut = Math.max(value.lastIndexOf('/'), value.lastIndexOf(String.fromCharCode(92)));
+      let leaf = '';
+      for (const character of value.slice(cut + 1)) {
+        const code = character.codePointAt(0);
+        if (code < 32 || code === 127) continue;
+        leaf += character;
+      }
+      const trimmed = leaf.trim();
+      if (trimmed === '' || trimmed === '.' || trimmed === '..') return 'file';
+      return trimmed.slice(0, 180);
+    }
+
+    function safeMimeType(raw) {
+      const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+      if (value.length === 0 || value.length > 120) return '';
+      const parts = value.split('/');
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return '';
+      const allowed = /^[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+      return allowed.test(parts[0]) && allowed.test(parts[1]) ? value : '';
     }
 
     function describeAttachment(draft, id) {
@@ -801,6 +941,7 @@ window.__ModuleLoader__.load({
         kind: draft && draft.kind === 'image' ? 'image' : 'file',
         ...(draft && typeof draft.width === 'number' ? { width: draft.width } : {}),
         ...(draft && typeof draft.height === 'number' ? { height: draft.height } : {}),
+        ...(file && typeof file.lastModified === 'number' ? { lastModified: file.lastModified } : {}),
         ...(size > MAX_BLOB_BYTES ? { missing: true } : {}),
       };
     }
@@ -845,11 +986,7 @@ window.__ModuleLoader__.load({
         const info = list.filter(Boolean);
         if (info.length === 0) return;
         patchLiveAttachments(sessionId, info);
-        for (const entry of entries) {
-          if (entry.attachments.some((item) => item.pending && ids.includes(item.key))) {
-            patchEntryAttachments(entry.id, info);
-          }
-        }
+        patchAttachmentsByIds(ids, info);
       });
     }
 
@@ -970,9 +1107,15 @@ window.__ModuleLoader__.load({
       return t('failAttachment');
     }
 
-    async function applySettings(settings, sessionId) {
-      const failures = [];
-      if (!settings || !sessionId) return failures;
+    /**
+     * Apply a captured setup. Returns the failures plus the session id the
+     * writes actually landed on: a preset switch may rebuild the session, and
+     * the draft has to follow it.
+     */
+    async function applySettingsTo(settings, sessionId) {
+      const current = { failures: [], sessionId };
+      if (!settings || !sessionId) return current;
+      const failures = current.failures;
 
       // 1. Agent preset first: it can only change on a blank session, and a
       //    successful switch may recreate the session that the other writes
@@ -985,7 +1128,12 @@ window.__ModuleLoader__.load({
             const remote = runtime && runtime.remote;
             if (sessionIsBlank(session) && remote && remote.agentPresets && typeof remote.agentPresets.select === 'function') {
               const result = await remote.agentPresets.select(sessionId, settings.agentPreset);
-              if (result && result.ok === false) failures.push('preset');
+              if (result && result.ok === false) {
+                failures.push('preset');
+              } else {
+                sessionId = await resolveSessionAfterPreset(sessionId);
+                current.sessionId = sessionId;
+              }
             } else {
               failures.push('preset');
             }
@@ -1040,7 +1188,12 @@ window.__ModuleLoader__.load({
         }
       }
 
-      return failures;
+      return current;
+    }
+
+    /** Compatibility wrapper: apply the setup and report only the failures. */
+    async function applySettings(settings, sessionId) {
+      return (await applySettingsTo(settings, sessionId)).failures;
     }
 
     function getConversation() {
@@ -1091,6 +1244,7 @@ window.__ModuleLoader__.load({
     }
 
     const composerBySession = new Map();
+    let lastPublishedSessionId = null;
     let activeSessionId = null;
     let lastDraft = '';
     let lastState = null;
@@ -1110,13 +1264,12 @@ window.__ModuleLoader__.load({
     function adoptOrphanEntries(sessionId) {
       if (!sessionId) return;
       let changed = false;
-      for (const item of entries) {
-        if (!item.sessionId) {
-          item.sessionId = sessionId;
-          changed = true;
-        }
-      }
-      if (changed) commitEntries(entries);
+      const next = entries.map((item) => {
+        if (item.sessionId) return item;
+        changed = true;
+        return { ...item, sessionId };
+      });
+      if (changed) commitEntries(next);
     }
 
     function setActiveSession(sessionId) {
@@ -1131,13 +1284,70 @@ window.__ModuleLoader__.load({
     function publishComposer(sessionId, inputActions) {
       if (!sessionId || !inputActions) return;
       composerBySession.set(sessionId, inputActions);
+      lastPublishedSessionId = sessionId;
       setActiveSession(sessionId);
     }
 
-    function composerActions() {
-      if (activeSessionId && composerBySession.has(activeSessionId)) return composerBySession.get(activeSessionId);
-      for (const actions of composerBySession.values()) return actions;
+    /**
+     * Composer actions for a session. Never borrows another session's composer:
+     * restoring into the wrong composer writes the draft into the wrong chat.
+     */
+    function composerActions(sessionId) {
+      const key = sessionId || activeSessionId;
+      if (key && composerBySession.has(key)) return composerBySession.get(key);
+      if (lastPublishedSessionId && composerBySession.has(lastPublishedSessionId)) {
+        return composerBySession.get(lastPublishedSessionId);
+      }
       return null;
+    }
+
+    function sessionForActions(actions) {
+      if (!actions) return null;
+      for (const [id, value] of composerBySession) {
+        if (value === actions) return id;
+      }
+      return null;
+    }
+
+    /** A preset switch remounts the composer; wait for it instead of guessing. */
+    async function waitForActions(sessionId, timeoutMs) {
+      const budget = typeof timeoutMs === 'number' ? timeoutMs : 1500;
+      const started = Date.now();
+      for (;;) {
+        const actions = sessionId ? composerBySession.get(sessionId) : null;
+        if (actions) return actions;
+        if (Date.now() - started >= budget) return null;
+        await delay(50);
+      }
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    /**
+     * A preset switch on a blank session can replace the session object. Follow
+     * the new one instead of writing the draft into a dead id.
+     */
+    async function resolveSessionAfterPreset(previous) {
+      if (!previous) return previous;
+      const sessions = sessionsService();
+      if (!sessions || typeof sessions.binding !== 'function') return activeSessionId || previous;
+      const present = () => {
+        try {
+          const binding = sessions.binding(previous);
+          return !!(binding && binding.session);
+        } catch {
+          return true;
+        }
+      };
+      if (present()) return previous;
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        if (activeSessionId && activeSessionId !== previous) return activeSessionId;
+        await delay(50);
+        if (present()) return previous;
+      }
+      return activeSessionId || previous;
     }
 
     function currentDraft() {
@@ -1257,7 +1467,7 @@ window.__ModuleLoader__.load({
         toast(t('noComposer'));
         return { ok: false, failures: [] };
       }
-      const sessionId = activeSessionId;
+      let sessionId = sessionForActions(actions) || activeSessionId;
 
       if (entry.live) {
         const currentText = normalize(currentDraft());
@@ -1290,14 +1500,16 @@ window.__ModuleLoader__.load({
       // draft and its attachments must be restored into.
       if (entry.settings) {
         try {
-          for (const item of await applySettings(entry.settings, sessionId)) failures.push(item);
+          const applied = await applySettingsTo(entry.settings, sessionId);
+          for (const item of applied.failures) failures.push(item);
+          sessionId = applied.sessionId || sessionId;
         } catch {
           failures.push('settings');
         }
-        // The preset switch can remount the composer; give the tracker one tick
-        // to publish the fresh inputActions before writing the draft.
-        await new Promise((resolve) => window.setTimeout(resolve, 60));
-        actions = composerActions() || actions;
+        // The preset switch can remount the composer: wait for that session's
+        // fresh inputActions rather than guessing a fixed delay.
+        const reconnected = await waitForActions(sessionId, 1500);
+        if (reconnected) actions = reconnected;
       }
       if (!actions || typeof actions.setDraft !== 'function') {
         toast(t('noComposer'));
@@ -1319,7 +1531,9 @@ window.__ModuleLoader__.load({
           continue;
         }
         try {
-          files.push(new File([blob], attachment.name || 'file', { type: attachment.mime || blob.type || '' }));
+          const name = safeFileName(attachment.name);
+          const type = safeMimeType(attachment.mime || blob.type);
+          files.push(new File([blob], name, type ? { type } : undefined));
           sources.push(attachment);
         } catch {
           failures.push('attachment');
@@ -1440,6 +1654,27 @@ window.__ModuleLoader__.load({
       return useSyncExternalStore(subscribeToast, () => toastText, () => toastText);
     }
 
+    /** One preview URL per blob key, oldest evicted once past the cap. */
+    function rememberBlobUrl(key, blob) {
+      const existing = blobUrls.get(key);
+      if (existing) return existing;
+      if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return null;
+      const objectUrl = URL.createObjectURL(blob);
+      blobUrls.set(key, objectUrl);
+      while (blobUrls.size > BLOB_URL_LIMIT) {
+        const oldest = blobUrls.keys().next();
+        if (oldest.done || oldest.value === key) break;
+        const stale = blobUrls.get(oldest.value);
+        blobUrls.delete(oldest.value);
+        try {
+          URL.revokeObjectURL(stale);
+        } catch {
+          /* ignore */
+        }
+      }
+      return objectUrl;
+    }
+
     function useBlobUrl(attachment) {
       const key = attachment && attachment.key;
       const pending = attachment && attachment.pending;
@@ -1458,17 +1693,14 @@ window.__ModuleLoader__.load({
           getBlob(key).then((blob) => {
             if (!alive) return;
             if (blob) {
-              let objectUrl = blobUrls.get(key);
-              if (!objectUrl && typeof URL !== 'undefined' && URL.createObjectURL) {
-                objectUrl = URL.createObjectURL(blob);
-                blobUrls.set(key, objectUrl);
-              }
-              setUrl(objectUrl || null);
+              setUrl(rememberBlobUrl(key, blob));
               return;
             }
-            if (pending && tries < 4) {
+            // An upload in flight can take a few seconds; keep trying, then
+            // fall back to the "missing" chip.
+            if (pending && tries < 12) {
               tries += 1;
-              timer = window.setTimeout(load, 400);
+              timer = window.setTimeout(load, 500);
               return;
             }
             setUrl('missing');
@@ -2328,8 +2560,13 @@ window.__ModuleLoader__.load({
       const mounted = useRef(true);
 
       stateRef.current = { state, sessionId };
-      lastState = { state, sessionId };
-      lastDraft = draft;
+
+      // Module state is read by timers and the hotkey, never by this render,
+      // so publish it after the commit instead of during it.
+      useEffect(() => {
+        lastState = { state, sessionId };
+        lastDraft = draft;
+      });
 
       useEffect(() => {
         if (!sessionId) return;
@@ -3199,6 +3436,10 @@ window.__ModuleLoader__.load({
         placeHoverCard,
         readSettings,
         applySettings,
+        applySettingsTo,
+        flushCommit,
+        safeFileName,
+        safeMimeType,
         sessionIsBlank,
         liveSessionOf,
         setRuntime: (value) => {
@@ -3239,9 +3480,12 @@ window.__ModuleLoader__.load({
             SettingsPage,
           ),
         );
-        // Release object URLs when the page goes away.
-        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-          window.addEventListener('pagehide', () => {
+        // Flush the coalesced history write and release preview URLs on the way
+        // out; owned by the fiber so a reload cannot leave a stale listener.
+        ctx.effect(() => {
+          if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
+          const release = () => {
+            flushCommit();
             for (const url of blobUrls.values()) {
               try {
                 URL.revokeObjectURL(url);
@@ -3250,8 +3494,17 @@ window.__ModuleLoader__.load({
               }
             }
             blobUrls.clear();
-          });
-        }
+          };
+          const onVisibility = () => {
+            if (document.visibilityState === 'hidden') flushCommit();
+          };
+          window.addEventListener('pagehide', release);
+          document.addEventListener('visibilitychange', onVisibility);
+          return () => {
+            window.removeEventListener('pagehide', release);
+            document.removeEventListener('visibilitychange', onVisibility);
+          };
+        });
       },
     };
   },
