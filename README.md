@@ -16,7 +16,7 @@ dsh plugin add dsh-composer-rewind
 dsh plugin add <本目录绝对路径>
 ```
 
-要求 DeepSeek Harness `0.2.1-rc.3`。安装后刷新 Web GUI，输入框左侧出现时钟按钮。
+需要 DeepSeek Harness 0.2.1 系列（rc.3 及之后的小版本均可运行）。安装后刷新 Web GUI，输入框左侧出现时钟按钮。
 
 ## 功能
 
@@ -85,7 +85,7 @@ dsh plugin add <本目录绝对路径>
 
 ## 兼容性与限制
 
-适配 DeepSeek Harness `0.2.1-rc.3`（客户端插件协议：`window.__ModuleLoader__` + Cordis 4 服务）。设置还原使用 0.2.x 的写入路径：模型走 `remote.session.selectModel`，空白会话判定走 `session.getSnapshot().blank`，使用模式走 `remote.agentPresets.select`，权限走 `/permission` 指令；旧版本的调用方式保留为回退分支。
+适配 DeepSeek Harness 0.2.1 系列，不绑定具体补丁版本（rc.3 起可用，后续 rc 版本实测正常）。客户端插件协议为 `window.__ModuleLoader__` + Cordis 4 服务。设置还原使用该系列的写入路径：模型走 `remote.session.selectModel`，空白会话判定走 `session.getSnapshot().blank`，使用模式走 `remote.agentPresets.select`，权限走 `/permission` 指令；这些能力在版本间缺失时会自动退回旧调用方式，因此同一份代码可在该系列各版本上运行。
 
 已知限制：
 
