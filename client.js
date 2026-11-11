@@ -22,6 +22,9 @@ window.__ModuleLoader__.load({
     /** The plugin context, captured in apply(); settings access goes through it. */
     let runtime = null;
 
+    /** Slot hooks are optional on older builds: a missing one answers null. */
+    const NOOP_SELECTOR = (selector) => (typeof selector === 'function' ? selector(null) : null);
+
     /* ------------------------------------------------------------------ *
      * Text
      * ------------------------------------------------------------------ */
@@ -87,6 +90,9 @@ window.__ModuleLoader__.load({
         settingsNav: '输入框历史',
         settingsTitle: '输入框历史',
         settingsHint: '按会话查看和管理已保存的输入内容、附件与配置。',
+        settingsBindWorkspace: '绑定工作区',
+        settingsBindWorkspaceHint: '开启后，历史面板和 Ctrl+Alt+Z 会取当前工作区的全部会话，并按会话名称分组。',
+        settingsBindWorkspaceUnavailable: '当前版本没有工作区信息，暂时无法绑定。',
         settingsStatSessions: '会话',
         settingsStatEntries: '记录',
         settingsStatAttachments: '附件',
@@ -173,6 +179,9 @@ window.__ModuleLoader__.load({
         settingsNav: 'Composer history',
         settingsTitle: 'Composer history',
         settingsHint: 'Browse and manage the contents, attachments and setup saved per session.',
+        settingsBindWorkspace: 'Bind to workspace',
+        settingsBindWorkspaceHint: 'When on, the history panel and Ctrl+Alt+Z use every session in this workspace, grouped by session name.',
+        settingsBindWorkspaceUnavailable: 'This build exposes no workspace data, so binding is unavailable.',
         settingsStatSessions: 'Sessions',
         settingsStatEntries: 'Entries',
         settingsStatAttachments: 'Attachments',
@@ -274,6 +283,7 @@ window.__ModuleLoader__.load({
     const LIVE_KEY = 'dsh-composer-rewind:live:v3';
     const PREV_LIVE_KEY = 'dsh-prompt-vault:live:v3';
     const LEGACY_LIVE_KEY = 'dsh-prompt-vault:live';
+    const PREFS_KEY = 'dsh-composer-rewind:prefs:v1';
     const MAX_ENTRIES = 300;
     const MIN_CHARS = 3;
     const COALESCE_WINDOW_MS = 10 * 60 * 1000;
@@ -521,6 +531,7 @@ window.__ModuleLoader__.load({
         command: typeof raw.command === 'string' && raw.command.startsWith('/') ? raw.command : null,
         attachments,
         settings: sanitizeSettings(raw.settings),
+        ...(raw.retired === true ? { retired: true } : {}),
       };
     }
 
@@ -532,8 +543,14 @@ window.__ModuleLoader__.load({
       return liveOf(readRaw(LEGACY_LIVE_KEY));
     }
 
+    function loadPrefs() {
+      const raw = readRaw(PREFS_KEY);
+      return { bindWorkspace: Boolean(raw) && raw.bindWorkspace === true };
+    }
+
     let entries = loadEntries();
     let live = loadLive();
+    let prefs = loadPrefs();
     const listeners = new Set();
 
     function emit() {
@@ -549,6 +566,15 @@ window.__ModuleLoader__.load({
     function subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    }
+
+    /** History scope preference: the composer's session by default, its workspace when on. */
+    function setBindWorkspace(value) {
+      const next = value === true;
+      if (prefs.bindWorkspace === next) return;
+      prefs = { ...prefs, bindWorkspace: next };
+      writeRaw(PREFS_KEY, prefs);
+      emit();
     }
 
     function snapshotEntries() {
@@ -608,6 +634,35 @@ window.__ModuleLoader__.load({
       live = next;
       writeRaw(LIVE_KEY, live);
       emit();
+    }
+
+    /** Remember that the draft already reached history, so a reload cannot repeat it. */
+    function markLiveRetired() {
+      if (!live) return;
+      live = { ...live, retired: true };
+      writeRaw(LIVE_KEY, live);
+    }
+
+    /**
+     * Write the draft on every change without publishing it: a process killed by
+     * a restart never fires pagehide, so the pause-debounced write alone can be
+     * stale. The 450ms publish below still owns the UI cadence.
+     */
+    function persistLiveDraft(snapshot) {
+      const next = liveOf(snapshot);
+      if (next) writeRaw(LIVE_KEY, next);
+    }
+
+    /**
+     * Move a draft left by a killed page into history, exactly like the unload
+     * flush of a clean close would have done. Runs once per page load.
+     */
+    function recoverInterruptedDraft() {
+      if (!live || live.retired === true) return false;
+      const retired = retireSnapshot(live);
+      live = { ...live, retired: true };
+      writeRaw(LIVE_KEY, live);
+      return retired;
     }
 
     function signatureOf(snapshot) {
@@ -1246,6 +1301,7 @@ window.__ModuleLoader__.load({
     const composerBySession = new Map();
     let lastPublishedSessionId = null;
     let activeSessionId = null;
+    let activeWorkspace = null; // { workspaceId, sessionIds } of the composer's session
     let lastDraft = '';
     let lastState = null;
     let lastCapture = null;
@@ -1644,6 +1700,10 @@ window.__ModuleLoader__.load({
 
     function useLive() {
       return useSyncExternalStore(subscribe, snapshotLive, snapshotLive);
+    }
+
+    function usePrefs() {
+      return useSyncExternalStore(subscribe, () => prefs, () => prefs);
     }
 
     function useUiOpen() {
@@ -2168,6 +2228,20 @@ window.__ModuleLoader__.load({
         overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .pv-set-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
       .pv-set-actions-note{flex:1 1 220px;min-width:0;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+      .pv-set-toggle{display:flex;align-items:center;gap:12px;padding:10px 12px;
+        border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);
+        background:var(--dsw-alias-bg-layer-1)}
+      .pv-set-toggle-text{flex:1;min-width:0}
+      .pv-set-toggle-label{font-size:13px;font-weight:500;line-height:1.4}
+      .pv-set-toggle-hint{margin-top:2px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}
+      .pv-set-switch{flex:none;position:relative;width:34px;height:20px;padding:0;border:0;border-radius:10px;
+        cursor:pointer;background:color-mix(in srgb,var(--dsw-alias-label-primary) 18%,transparent);
+        transition:background-color .12s ease}
+      .pv-set-switch[data-on="1"]{background:var(--dsw-alias-brand-primary)}
+      .pv-set-switch:disabled{opacity:.45;cursor:default}
+      .pv-set-switch-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+        background:var(--dsw-alias-bg-base);transition:transform .12s ease}
+      .pv-set-switch[data-on="1"] .pv-set-switch-knob{transform:translateX(14px)}
       .pv-set-btn{height:28px;padding:0 12px;border:1px solid var(--dsw-alias-border-l2);
         border-radius:var(--dsw-radius-md,8px);background:transparent;color:var(--dsw-alias-label-primary);
         font-size:12px;line-height:26px;cursor:pointer;white-space:nowrap}
@@ -2553,6 +2627,8 @@ window.__ModuleLoader__.load({
       const attachmentIds = state && Array.isArray(state.attachmentIds) ? state.attachmentIds : [];
       const attachmentKey = attachmentIds.join('|');
       const phase = state && state.phase ? state.phase : 'plain';
+      const useWorkspacesProp = props.useWorkspaces || NOOP_SELECTOR;
+      const workspaceItems = useWorkspacesProp((state) => (state && state.items) || null);
       const stateRef = useRef(null);
       const previousInfo = useRef({ text: '', references: [], command: null, ids: [], sessionId: null });
       const previousPhase = useRef('plain');
@@ -2573,15 +2649,26 @@ window.__ModuleLoader__.load({
         publishComposer(sessionId, props.inputActions);
       }, [sessionId, props.inputActions]);
 
+      // The panel and the hotkey share this scope; publish it after commit.
+      useEffect(() => {
+        const found = workspaceOf(workspaceItems, sessionId);
+        activeWorkspace = found
+          ? { workspaceId: found.workspaceId, sessionIds: [...found.sessionIds] }
+          : null;
+      }, [workspaceItems, sessionId]);
+
       // Resolve and persist attachment bytes as soon as the rail changes; the
       // snapshot itself is written on the debounce below.
       useEffect(() => {
         if (sessionId && attachmentIds.length > 0) rememberAttachments(sessionId, attachmentIds);
       }, [sessionId, attachmentKey]);
 
-      // Debounced live snapshot. One write per pause, never one per keystroke.
+      // The draft reaches storage on every change: a page killed by a process
+      // restart never fires pagehide, so the pause-debounced publish alone can
+      // lose the last edit. The timer still owns the UI cadence below.
       useEffect(() => {
         if (!sessionId) return undefined;
+        persistLiveDraft(buildSnapshotFrom(stateRef.current.state, sessionId));
         if (holdTimer.current) window.clearTimeout(holdTimer.current);
         holdTimer.current = window.setTimeout(() => {
           holdTimer.current = null;
@@ -2641,6 +2728,7 @@ window.__ModuleLoader__.load({
           lastCapture = snapshot;
           setLiveSnapshot(snapshot);
           retireSnapshot(snapshot);
+          markLiveRetired();
         };
         const onVisibility = () => {
           if (document.visibilityState === 'hidden') {
@@ -2753,8 +2841,70 @@ window.__ModuleLoader__.load({
       return entries.filter((entry) => entry.sessionId === sessionId);
     }
 
+    function workspaceOf(items, sessionId) {
+      if (!Array.isArray(items) || !sessionId) return null;
+      for (const workspace of items) {
+        if (workspace && Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)) {
+          return workspace;
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Entries the composer recalls: its own session by default, every session of
+     * the owning workspace once history is bound to workspaces.
+     */
+    function scopedEntries(list, options) {
+      const sessionId = options && options.sessionId ? options.sessionId : null;
+      const workspace = options && options.bindWorkspace ? options.workspace : null;
+      if (!workspace || !Array.isArray(workspace.sessionIds)) {
+        return sessionId ? list.filter((entry) => entry.sessionId === sessionId) : list;
+      }
+      const allowed = new Set(workspace.sessionIds);
+      if (sessionId) allowed.add(sessionId);
+      return list.filter((entry) => typeof entry.sessionId === 'string' && allowed.has(entry.sessionId));
+    }
+
+    function sessionNameOf(sessionsById, sessionId, fallbackEntries) {
+      const row = sessionsById && sessionId ? sessionsById[sessionId] : null;
+      const title = row && typeof row.title === 'string' ? row.title.trim() : '';
+      if (title) return title;
+      if (fallbackEntries && fallbackEntries.length) return sessionTitle(fallbackEntries);
+      return t('settingsUnknownSession');
+    }
+
+    /** Group rows by their session, current session first, then newest first. */
+    function groupEntriesBySession(list, options) {
+      const current = options && options.activeSession ? options.activeSession : null;
+      const nameOf = options && typeof options.nameOf === 'function' ? options.nameOf : () => t('settingsUnknownSession');
+      const map = new Map();
+      for (const entry of list) {
+        const id = entry.sessionId || '';
+        if (!map.has(id)) map.set(id, { key: id, rows: [], at: 0 });
+        const group = map.get(id);
+        group.rows.push(entry);
+        group.at = Math.max(group.at, entry.at || 0);
+      }
+      const groups = [...map.values()];
+      for (const group of groups) {
+        group.rows.sort((left, right) => (right.at || 0) - (left.at || 0));
+        group.label = nameOf(group.key || null, group.rows);
+      }
+      groups.sort((left, right) => {
+        if (left.key === current) return -1;
+        if (right.key === current) return 1;
+        return right.at - left.at;
+      });
+      return groups;
+    }
+
     function recallPrevious() {
-      const source = entriesForSession(activeSessionId);
+      const source = scopedEntries(entries, {
+        bindWorkspace: prefs.bindWorkspace,
+        sessionId: activeSessionId,
+        workspace: activeWorkspace,
+      });
       if (source.length === 0) {
         toast(t('noHistory'));
         return;
@@ -2795,12 +2945,19 @@ window.__ModuleLoader__.load({
       return Promise.resolve(false);
     }
 
-    function Panel() {
+    function Panel(props) {
       const open = useUiOpen();
       const history = useEntries();
       const liveDraft = useLive();
       const activeSession = useActiveSession();
       const scheme = useScheme();
+      const preferences = usePrefs();
+      const useWorkspacesProp = (props && props.useWorkspaces) || NOOP_SELECTOR;
+      const useSessionsProp = (props && props.useSessions) || NOOP_SELECTOR;
+      const workspaceItems = useWorkspacesProp((state) => (state && state.items) || null);
+      const sessionsById = useSessionsProp((state) => (state && state.byId) || null);
+      const workspace = preferences.bindWorkspace ? workspaceOf(workspaceItems, activeSession) : null;
+      const workspaceId = workspace ? workspace.workspaceId : null;
       const [query, setQuery] = useState('');
       const [activeId, setActiveId] = useState(null);
       const [confirming, setConfirming] = useState(false);
@@ -2844,16 +3001,38 @@ window.__ModuleLoader__.load({
         // both "current draft" and the newest history entry. Show it once; the
         // history copy reappears as soon as the composer no longer holds it.
         const liveSignature = draftRow ? entrySignature(draftRow.text, draftRow.attachments) : null;
-        // Entries belong to the session they were written in; keep the panel
-        // and Ctrl+Alt+Z scoped to the session that owns the composer now.
-        const scoped = activeSession ? entriesForSession(activeSession) : history;
+        // With workspace binding on, every session of this workspace shares the
+        // list; otherwise the panel stays scoped to the session that owns the
+        // composer now.
+        const scoped = scopedEntries(history, {
+          bindWorkspace: preferences.bindWorkspace,
+          sessionId: activeSession,
+          workspace,
+        });
         const list = scoped.filter((entry) => !liveSignature || entrySignature(entry.text, entry.attachments) !== liveSignature);
         const matches = needle ? list.filter((entry) => haystack(entry).includes(needle)) : list;
-        if (draftRow && (!needle || haystack(draftRow).includes(needle))) return [draftRow, ...matches];
-        return matches;
-      }, [history, liveDraft, query, activeSession]);
+        const draft = draftRow && (!needle || haystack(draftRow).includes(needle)) ? [draftRow] : [];
+        if (preferences.bindWorkspace && workspaceId) {
+          // Flatten in the same order the groups render, so arrow keys and the
+          // visible list agree.
+          const ordered = groupEntriesBySession(matches, { activeSession }).flatMap((group) => group.rows);
+          return [...draft, ...ordered];
+        }
+        return [...draft, ...matches];
+      }, [history, liveDraft, query, activeSession, preferences.bindWorkspace, workspace, workspaceId]);
 
       const groups = useMemo(() => {
+        if (preferences.bindWorkspace && workspaceId) {
+          const draft = rows.filter((entry) => entry.live);
+          const rest = rows.filter((entry) => !entry.live);
+          return [
+            ...(draft.length > 0 ? [{ key: 'live', label: t('groupCurrent'), rows: draft }] : []),
+            ...groupEntriesBySession(rest, {
+              activeSession,
+              nameOf: (id, groupRows) => sessionNameOf(sessionsById, id, groupRows),
+            }),
+          ];
+        }
         const order = [];
         const map = new Map();
         for (const entry of rows) {
@@ -2871,7 +3050,7 @@ window.__ModuleLoader__.load({
           earlier: t('groupEarlier'),
         };
         return order.map((key) => ({ key, label: labels[key] || '', rows: map.get(key) }));
-      }, [rows]);
+      }, [rows, preferences.bindWorkspace, workspaceId, activeSession, sessionsById]);
 
       const frame = useMemo(
         () => (open ? panelFrame || measurePanelFrame() : null),
@@ -3210,9 +3389,13 @@ window.__ModuleLoader__.load({
      * Settings page
      * ------------------------------------------------------------------ */
 
-    function SettingsPage() {
+    function SettingsPage(props) {
       const history = useEntries();
       const active = useActiveSession();
+      const preferences = usePrefs();
+      const canBindWorkspace = Boolean(props && typeof props.useWorkspaces === 'function');
+      const useSessionsProp = (props && props.useSessions) || NOOP_SELECTOR;
+      const sessionsById = useSessionsProp((state) => (state && state.byId) || null);
       const [confirmAll, setConfirmAll] = useState(false);
       const [confirmGroup, setConfirmGroup] = useState(null);
       const [expanded, setExpanded] = useState({});
@@ -3277,6 +3460,33 @@ window.__ModuleLoader__.load({
         ),
         h(
           'div',
+          { className: 'pv-set-toggle' },
+          h(
+            'div',
+            { className: 'pv-set-toggle-text' },
+            h('div', { className: 'pv-set-toggle-label' }, t('settingsBindWorkspace')),
+            h(
+              'div',
+              { className: 'pv-set-toggle-hint' },
+              canBindWorkspace ? t('settingsBindWorkspaceHint') : t('settingsBindWorkspaceUnavailable'),
+            ),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              role: 'switch',
+              'aria-checked': preferences.bindWorkspace ? 'true' : 'false',
+              className: 'pv-set-switch',
+              'data-on': preferences.bindWorkspace ? '1' : '0',
+              disabled: !canBindWorkspace,
+              onClick: () => setBindWorkspace(!preferences.bindWorkspace),
+            },
+            h('span', { className: 'pv-set-switch-knob' }),
+          ),
+        ),
+        h(
+          'div',
           { className: 'pv-set-stats' },
           stat(t('settingsStatSessions'), String(groups.length)),
           stat(t('settingsStatEntries'), String(history.length)),
@@ -3320,7 +3530,11 @@ window.__ModuleLoader__.load({
                     h(
                       'div',
                       { className: 'pv-set-group-title' },
-                      h('span', { className: 'pv-set-group-name' }, group.id ? sessionTitle(group.entries) : t('settingsUnknownSession')),
+                      h(
+                        'span',
+                        { className: 'pv-set-group-name' },
+                        group.id ? sessionNameOf(sessionsById, group.id, group.entries) : t('settingsUnknownSession'),
+                      ),
                       group.id === active && group.id ? h('span', { className: 'pv-set-current' }, t('settingsCurrentSession')) : null,
                     ),
                     h(
@@ -3445,6 +3659,14 @@ window.__ModuleLoader__.load({
         setRuntime: (value) => {
           runtime = value;
         },
+        bindWorkspace: () => prefs.bindWorkspace,
+        setBindWorkspace,
+        persistLiveDraft,
+        recoverInterruptedDraft,
+        workspaceOf,
+        scopedEntries,
+        sessionNameOf,
+        groupEntriesBySession,
         reset: () => {
           entries = [];
           live = null;
@@ -3454,6 +3676,10 @@ window.__ModuleLoader__.load({
         },
       };
     }
+
+    // A page killed by a process restart never runs its unload flush; move the
+    // draft it left behind into history before the UI mounts.
+    recoverInterruptedDraft();
 
     return {
       inject: ['slots'],

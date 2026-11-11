@@ -117,6 +117,34 @@ check(
   /ctx\.effect\(\(\) => \{\s*if \(typeof window === 'undefined'/.test(source),
 );
 
+check(
+  'a killed page draft is recovered before the UI mounts',
+  /function recoverInterruptedDraft/.test(source) && /recoverInterruptedDraft\(\);/.test(source),
+);
+check(
+  'the draft is written on every change, not only on the pause',
+  /function persistLiveDraft/.test(source) && /persistLiveDraft\(snapshot\)/.test(source),
+);
+check('the live record remembers it already reached history', /retired === true/.test(source) && /function markLiveRetired/.test(source));
+check(
+  'the history scope preference is stored',
+  /PREFS_KEY/.test(source) &&
+    /dsh-composer-rewind:prefs:v1/.test(source) &&
+    /function setBindWorkspace/.test(source) &&
+    /function usePrefs/.test(source),
+);
+check(
+  'one workspace shares its history and groups it by session name',
+  /function workspaceOf/.test(source) &&
+    /function scopedEntries/.test(source) &&
+    /function groupEntriesBySession/.test(source) &&
+    /groupEntriesBySession\(rest/.test(source),
+);
+check(
+  'the workspace toggle is localised in both dictionaries',
+  (source.match(/settingsBindWorkspace:/g) || []).length === 2,
+);
+
 /* -------------------------------------------------------------- files ---- */
 
 for (const file of ['index.js', 'cordis.patch.yml', 'locale/en.json', 'locale/zh.json', 'icon.svg', 'README.md']) {

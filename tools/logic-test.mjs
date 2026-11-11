@@ -389,6 +389,124 @@ test('legacy entries without a session are adopted by the first session', () => 
   assert.equal(api.entriesForSession('s1').length, 1);
 });
 
+/* --------------------------------------------------------- crash recovery ---- */
+
+test('a killed page leaves its draft in history on the next load', () => {
+  const live = JSON.stringify({
+    text: '重启前一秒还在输入的内容',
+    at: Date.now(),
+    sessionId: 's1',
+    references: [],
+    command: null,
+    attachments: [],
+    settings: null,
+  });
+  const { api } = load({ 'dsh-composer-rewind:live:v3': live });
+  assert.equal(api.entries().length, 1);
+  assert.equal(api.entries()[0].text, '重启前一秒还在输入的内容');
+  assert.equal(api.entries()[0].sessionId, 's1');
+  assert.equal(api.live().retired, true);
+});
+
+test('recovering a killed draft twice does not duplicate it', () => {
+  const live = JSON.stringify({ text: '只应归档一次的内容', at: Date.now(), sessionId: 's1' });
+  const first = load({ 'dsh-composer-rewind:live:v3': live });
+  assert.equal(first.api.entries().length, 1);
+  const second = load(first.storage.dump());
+  assert.equal(second.api.entries().length, 1);
+  assert.equal(second.api.entries()[0].text, '只应归档一次的内容');
+});
+
+test('a draft written just before a kill survives the next load', () => {
+  const first = load();
+  first.api.persistLiveDraft({ text: '进程被杀前最后一句', sessionId: 's1', at: Date.now() });
+  const second = load(first.storage.dump());
+  assert.equal(second.api.entries()[0].text, '进程被杀前最后一句');
+  assert.equal(second.api.entriesForSession('s1').length, 1);
+});
+
+test('the draft reaches storage before the pause publish', () => {
+  const { api, storage } = load();
+  api.persistLiveDraft({ text: '刚打出来的半句', sessionId: 's1', at: Date.now() });
+  assert.equal(api.live(), null, 'the panel publish still waits for the pause');
+  const stored = JSON.parse(storage.getItem('dsh-composer-rewind:live:v3'));
+  assert.equal(stored.text, '刚打出来的半句');
+  assert.equal(stored.sessionId, 's1');
+});
+
+/* ------------------------------------------------------- workspace binding ---- */
+
+test('workspace binding shares the owning workspace and nothing else', () => {
+  const { api } = load();
+  const workspaces = [
+    { workspaceId: 'w1', sessionIds: ['s1', 's2'] },
+    { workspaceId: 'w2', sessionIds: ['s3'] },
+  ];
+  assert.equal(api.workspaceOf(workspaces, 's2'), workspaces[0]);
+  assert.equal(api.workspaceOf(workspaces, 's9'), null);
+
+  const list = [
+    { sessionId: 's1', text: 'one' },
+    { sessionId: 's2', text: 'two' },
+    { sessionId: 's3', text: 'three' },
+    { sessionId: null, text: 'legacy' },
+  ];
+  assert.deepEqual(
+    plain(api.scopedEntries(list, { bindWorkspace: false, sessionId: 's1' }).map((entry) => entry.text)),
+    ['one'],
+  );
+  assert.deepEqual(
+    plain(
+      api
+        .scopedEntries(list, { bindWorkspace: true, sessionId: 's1', workspace: workspaces[0] })
+        .map((entry) => entry.text),
+    ),
+    ['one', 'two'],
+  );
+  assert.deepEqual(
+    plain(
+      api
+        .scopedEntries(list, { bindWorkspace: true, sessionId: 's3', workspace: null })
+        .map((entry) => entry.text),
+    ),
+    ['three'],
+  );
+});
+
+test('workspace groups are named, current first and ordered by recency', () => {
+  const { api } = load();
+  const groups = api.groupEntriesBySession(
+    [
+      { sessionId: 's1', text: 'a', at: 10 },
+      { sessionId: 's2', text: 'b', at: 30 },
+      { sessionId: 's1', text: 'c', at: 5 },
+      { sessionId: 's3', text: 'd', at: 20 },
+    ],
+    {
+      activeSession: 's1',
+      nameOf: (id) => ({ s1: '当前会话', s2: '会话二', s3: '会话三' })[id] || '(none)',
+    },
+  );
+  assert.deepEqual(plain(groups.map((group) => group.label)), ['当前会话', '会话二', '会话三']);
+  assert.deepEqual(plain(groups[0].rows.map((entry) => entry.text)), ['a', 'c']);
+});
+
+test('session names fall back to the first recorded line', () => {
+  const { api } = load();
+  assert.equal(api.sessionNameOf({ s1: { title: '  收尾计划  ' } }, 's1', [{ text: '忽略我' }]), '收尾计划');
+  assert.equal(api.sessionNameOf({}, 's1', [{ text: '从记录里推断的标题' }]), '从记录里推断的标题');
+});
+
+test('workspace binding is off by default and persists once turned on', () => {
+  const first = load();
+  assert.equal(first.api.bindWorkspace(), false);
+  first.api.setBindWorkspace(true);
+  assert.equal(first.api.bindWorkspace(), true);
+  assert.equal(JSON.parse(first.storage.getItem('dsh-composer-rewind:prefs:v1')).bindWorkspace, true);
+  const second = load(first.storage.dump());
+  assert.equal(second.api.bindWorkspace(), true);
+});
+
 /* ------------------------------------------------------------- settings ---- */
 
 /**
